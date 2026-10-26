@@ -393,7 +393,8 @@ async function main() {
         totalCents,
         depositCents,
         balanceCents,
-        seeded: true,
+        // Only quotes with (fake) invoices are demo-only; the draft can be approved live.
+        seeded: Boolean(q.deposit),
         approvedAt: q.approvedAt,
         completedAt: q.completedAt,
         paidAt,

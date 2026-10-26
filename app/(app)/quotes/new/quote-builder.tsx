@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { AlertIcon, CalendarIcon, CheckIcon, ChevronLeftIcon, CloseIcon, PinIcon, PlusIcon, SparkIcon } from '@/components/icons';
-import { Badge, Button, Card, CardTitle, Label, StatePill, cx } from '@/components/ui';
+import { Button, Card, CardTitle, Label, StatePill, cx } from '@/components/ui';
 import { formatDateRange } from '@/lib/dates';
 import { centsToDecimal, formatMoney, parseMoney } from '@/lib/money';
 import {
@@ -17,7 +17,10 @@ import {
   type DraftLine,
   type PriceListOption,
 } from '@/lib/quote-draft';
+import { Dialog } from '@/components/dialog';
+import { formatDate } from '@/lib/dates';
 import { draftWithAiAction, saveDraftAction } from '../../actions';
+import { approveAndSendAction, retryInvoiceAction } from '../../payment-actions';
 
 // The AI quote builder: the customer's words on the left (with what the AI read from them
 // highlighted), the editable quote in the middle, and the approval summary on the right.
@@ -45,6 +48,7 @@ export function QuoteBuilder({ quoteId, quoteNumber, request, initialDraft, fact
   const [saveState, setSaveState] = useState<SaveState>('saved');
   const [saveError, setSaveError] = useState<string | null>(null);
   const [redrafting, setRedrafting] = useState(false);
+  const [approving, setApproving] = useState(false);
 
   // Saves run one at a time; edits made during a save are sent right after it, newest only.
   const saving = useRef<{ inFlight: boolean; next: DraftInput | null }>({ inFlight: false, next: null });
@@ -67,6 +71,11 @@ export function QuoteBuilder({ quoteId, quoteNumber, request, initialDraft, fact
     queue.inFlight = false;
     setSaveState(failed ? 'error' : 'saved');
     setSaveError(failed);
+  };
+
+  /** Resolves once every queued edit has been saved. */
+  const flushSaves = async () => {
+    while (saving.current.inFlight) await new Promise((resolve) => setTimeout(resolve, 50));
   };
 
   const commit = (next: DraftInput) => {
@@ -124,6 +133,20 @@ export function QuoteBuilder({ quoteId, quoteNumber, request, initialDraft, fact
         <SaveIndicator state={saveState} error={saveError} />
       </div>
 
+      <ApproveDialog
+        open={approving}
+        onClose={() => setApproving(false)}
+        quoteId={quoteId}
+        customer={draft.customer}
+        depositCents={totals.depositCents}
+        depositPercent={draft.depositPercent}
+        dueDate={draft.depositDueDate}
+        beforeSend={async () => {
+          await flushSaves();
+          return saving.current.next === null;
+        }}
+      />
+
       <div className="grid grid-cols-[280px_minmax(516px,1fr)_324px] items-start gap-5">
         <SourcePanel
           request={request}
@@ -164,7 +187,14 @@ export function QuoteBuilder({ quoteId, quoteNumber, request, initialDraft, fact
             redrafting={redrafting}
             onRedraft={redraft}
           />
-          <SummaryCard draft={draft} errors={validation.fieldErrors} totals={totals} blockers={validation.blockers} onChange={commit} />
+          <SummaryCard
+            draft={draft}
+            errors={validation.fieldErrors}
+            totals={totals}
+            blockers={validation.blockers}
+            onChange={commit}
+            onApprove={() => setApproving(true)}
+          />
         </div>
       </div>
     </div>
@@ -744,12 +774,14 @@ function SummaryCard({
   totals,
   blockers,
   onChange,
+  onApprove,
 }: {
   draft: DraftInput;
   errors: ReturnType<typeof validateDraft>['fieldErrors'];
   totals: ReturnType<typeof draftTotals>;
   blockers: string[];
   onChange: (next: DraftInput) => void;
+  onApprove: () => void;
 }) {
   const parsePercent = (text: string) => {
     const n = Number(text.trim().replace('%', ''));
@@ -798,12 +830,7 @@ function SummaryCard({
         </dl>
       </div>
 
-      <Button
-        variant="primary"
-        className="mt-5 w-full"
-        disabled
-        title={blockers.length ? blockers.join(' · ') : 'PayPal invoicing is connected in milestone 3'}
-      >
+      <Button variant="primary" className="mt-5 w-full" disabled={blockers.length > 0} onClick={onApprove}>
         Approve & send deposit invoice
       </Button>
       {blockers.length > 0 ? (
@@ -815,8 +842,138 @@ function SummaryCard({
           ))}
         </ul>
       ) : (
-        <Badge className="mt-3">Ready to approve · PayPal sending arrives in milestone 3</Badge>
+        <p className="mt-3 text-[12px] text-fg-3">PayPal emails the invoice to the customer. You confirm before anything is sent.</p>
       )}
     </Card>
+  );
+}
+
+// --- Approval ------------------------------------------------------------------------
+
+type Sending = { kind: 'idle' } | { kind: 'sending' } | { kind: 'sent'; amountCents: number } | { kind: 'error'; message: string; paypal: boolean };
+
+const PAYPAL_FAILED = 'PayPal couldn’t send this invoice. No payment was requested.';
+
+function ApproveDialog({
+  open,
+  onClose,
+  quoteId,
+  customer,
+  depositCents,
+  depositPercent,
+  dueDate,
+  beforeSend,
+}: {
+  open: boolean;
+  onClose: () => void;
+  quoteId: string;
+  customer: DraftInput['customer'];
+  depositCents: number;
+  depositPercent: number;
+  dueDate: string | null;
+  beforeSend: () => Promise<boolean>;
+}) {
+  const router = useRouter();
+  const [status, setStatus] = useState<Sending>({ kind: 'idle' });
+
+  const finish = (amountCents: number) => {
+    setStatus({ kind: 'sent', amountCents });
+    setTimeout(() => router.push(`/quotes/${quoteId}`), 900);
+  };
+
+  const send = async () => {
+    setStatus({ kind: 'sending' });
+    if (!(await beforeSend())) {
+      setStatus({ kind: 'error', message: 'Your latest edits couldn’t be saved. Nothing was sent.', paypal: false });
+      return;
+    }
+    const result = await approveAndSendAction(quoteId);
+    if (result.ok) finish(result.data.amountCents);
+    else setStatus({ kind: 'error', message: result.error, paypal: result.error === PAYPAL_FAILED });
+  };
+
+  // After a PayPal failure the quote is approved: retrying reconciles the same invoice.
+  const retry = async () => {
+    setStatus({ kind: 'sending' });
+    const result = await retryInvoiceAction(quoteId, 'deposit');
+    if (result.ok) finish(result.data.amountCents);
+    else setStatus({ kind: 'error', message: result.error, paypal: true });
+  };
+
+  const sending = status.kind === 'sending' || status.kind === 'sent';
+  const failedAtPayPal = status.kind === 'error' && status.paypal;
+
+  return (
+    <Dialog
+      open={open}
+      onClose={() => {
+        if (failedAtPayPal) router.push(`/quotes/${quoteId}`);
+        else {
+          setStatus({ kind: 'idle' });
+          onClose();
+        }
+      }}
+      title="Ready to request the deposit?"
+      dismissible={!sending}
+      footer={
+        failedAtPayPal ? (
+          <>
+            <Button onClick={() => router.push(`/quotes/${quoteId}`)}>View quote</Button>
+            <Button variant="primary" onClick={retry}>
+              Retry sending
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button
+              onClick={() => {
+                setStatus({ kind: 'idle' });
+                onClose();
+              }}
+              disabled={sending}
+            >
+              Keep editing
+            </Button>
+            <Button variant="primary" onClick={send} disabled={sending}>
+              {status.kind === 'sending' ? 'Sending invoice…' : 'Create & send PayPal invoice'}
+            </Button>
+          </>
+        )
+      }
+    >
+      <p className="text-fg-2">Quotely approves this quote and PayPal emails a deposit invoice to your customer.</p>
+      <dl className="mt-4 flex flex-col gap-2 text-[13px]">
+        <div className="flex justify-between gap-4">
+          <dt className="text-fg-3">Customer</dt>
+          <dd className="text-right text-fg">{customer.company}</dd>
+        </div>
+        <div className="flex justify-between gap-4">
+          <dt className="text-fg-3">Email</dt>
+          <dd className="text-right text-fg">{customer.email}</dd>
+        </div>
+        <div className="flex justify-between gap-4">
+          <dt className="text-fg-3">Deposit</dt>
+          <dd className="text-right font-mono font-semibold text-fg">
+            {formatMoney(depositCents)} ({depositPercent}%)
+          </dd>
+        </div>
+        <div className="flex justify-between gap-4">
+          <dt className="text-fg-3">Due date</dt>
+          <dd className="text-right font-mono text-fg">{dueDate ? formatDate(`${dueDate}T12:00:00Z`) : '—'}</dd>
+        </div>
+      </dl>
+      <div aria-live="polite">
+        {status.kind === 'sent' && (
+          <p className="mt-4 flex items-center gap-2 font-[650] text-accent">
+            <CheckIcon className="size-4" /> Deposit invoice sent · {formatMoney(status.amountCents)} requested
+          </p>
+        )}
+        {status.kind === 'error' && (
+          <p role="alert" className="mt-4 flex items-start gap-2 text-[13px] text-danger">
+            <AlertIcon className="mt-0.5 size-4 shrink-0" /> {status.message}
+          </p>
+        )}
+      </div>
+    </Dialog>
   );
 }

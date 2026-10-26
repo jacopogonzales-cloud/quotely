@@ -1,6 +1,7 @@
-// PayPal REST client: every call this demo makes to PayPal goes through here. It covers
-// catalog products, billing plans, invoicing, Transaction Search and balances, with plain
-// fetch and no SDK. Server-side only: it reads the client secret from the environment.
+// PayPal REST client: every call the app makes to PayPal goes through here. It covers
+// catalog products, billing plans, invoicing (read, create, send, search), webhook signature
+// verification, Transaction Search and balances, with plain fetch and no SDK. Server-side only:
+// it reads the client secret from the environment. Sandbox only: the host is fixed on purpose.
 
 const BASE_URL = 'https://api-m.sandbox.paypal.com';
 const MAX_ATTEMPTS = 4;
@@ -41,26 +42,49 @@ async function accessToken(): Promise<string> {
   return access_token;
 }
 
-async function get<T>(path: string): Promise<T> {
+type CallOptions = {
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  body?: unknown;
+  /** Raw JSON text to send as-is (webhook verification must pass the event exactly as received). */
+  rawBody?: string;
+  headers?: Record<string, string>;
+};
+
+// GETs and requests carrying a PayPal-Request-Id are safe to repeat; other writes are tried once
+// (apart from a token refresh), so a timeout can never create a second invoice.
+async function call<T>(path: string, { method = 'GET', body, rawBody, headers = {} }: CallOptions = {}): Promise<T> {
+  const retryable = method === 'GET' || 'PayPal-Request-Id' in headers;
   for (let attempt = 1; ; attempt++) {
     const res = await fetch(`${BASE_URL}${path}`, {
-      headers: { Authorization: `Bearer ${await accessToken()}` },
+      method,
+      headers: {
+        Authorization: `Bearer ${await accessToken()}`,
+        ...(body !== undefined || rawBody !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...headers,
+      },
+      body: rawBody ?? (body === undefined ? undefined : JSON.stringify(body)),
       cache: 'no-store',
     });
-    if (res.ok) return (await res.json()) as T;
+    if (res.ok) {
+      // Some endpoints answer 202/204 with no body.
+      const text = await res.text();
+      return (text ? JSON.parse(text) : {}) as T;
+    }
 
     // A revoked or expired token: drop it and mint a new one once.
     if (res.status === 401 && attempt === 1) {
       cachedToken = undefined;
       continue;
     }
-    if ((res.status === 429 || res.status >= 500) && attempt < MAX_ATTEMPTS) {
+    if (retryable && (res.status === 429 || res.status >= 500) && attempt < MAX_ATTEMPTS) {
       await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 250));
       continue;
     }
     throw new PayPalApiError(res.status, path, await res.text());
   }
 }
+
+const get = <T>(path: string) => call<T>(path);
 
 // `path` must already carry whatever flag makes the endpoint report `total_pages`.
 async function listAll<T>(path: string, key: string, pageSize: number): Promise<T[]> {
@@ -147,6 +171,7 @@ export type Invoice = {
     currency_code: string;
     invoice_date?: string;
     payment_term?: { term_type?: string; due_date?: string };
+    metadata?: { recipient_view_url?: string; invoicer_view_url?: string };
   };
   primary_recipients?: {
     billing_info?: {
@@ -175,6 +200,113 @@ export type Invoice = {
     transactions?: { recipient_transaction_id?: string; refund_date?: string; method?: string; amount: Money }[];
   };
 };
+
+export const getInvoice = (id: string) => get<Invoice>(`/v2/invoicing/invoices/${encodeURIComponent(id)}`);
+
+export type NewInvoice = {
+  invoiceNumber: string;
+  /** YYYY-MM-DD */
+  dueDate: string;
+  note: string;
+  recipient: { email: string; businessName?: string; givenName?: string; surname?: string };
+  items: { name: string; description?: string; quantity: number; unitAmount: string }[];
+};
+
+/**
+ * Creates a draft invoice (EUR, no partial payments, no tips). `requestId` is sent as
+ * PayPal-Request-Id, so repeating the call with the same id returns the same invoice instead of
+ * creating a second one.
+ */
+export function createDraftInvoice(invoice: NewInvoice, requestId: string): Promise<Invoice> {
+  return call<Invoice>('/v2/invoicing/invoices', {
+    method: 'POST',
+    headers: { 'PayPal-Request-Id': requestId, Prefer: 'return=representation' },
+    body: {
+      detail: {
+        invoice_number: invoice.invoiceNumber,
+        currency_code: 'EUR',
+        note: invoice.note,
+        payment_term: { term_type: 'DUE_ON_DATE_SPECIFIED', due_date: invoice.dueDate },
+      },
+      invoicer: { business_name: 'Northstar Rentals' },
+      primary_recipients: [
+        {
+          billing_info: {
+            email_address: invoice.recipient.email,
+            ...(invoice.recipient.businessName ? { business_name: invoice.recipient.businessName } : {}),
+            ...(invoice.recipient.givenName
+              ? { name: { given_name: invoice.recipient.givenName, surname: invoice.recipient.surname ?? '' } }
+              : {}),
+          },
+        },
+      ],
+      items: invoice.items.map((item) => ({
+        name: item.name.slice(0, 200),
+        ...(item.description ? { description: item.description.slice(0, 1000) } : {}),
+        quantity: String(item.quantity),
+        unit_amount: { currency_code: 'EUR', value: item.unitAmount },
+        unit_of_measure: 'QUANTITY',
+      })),
+      configuration: { allow_tip: false, partial_payment: { allow_partial_payment: false } },
+    },
+  });
+}
+
+/** Sends a draft invoice to the recipient (PayPal emails it; in sandbox no real email leaves PayPal). */
+export function sendInvoice(id: string, requestId: string) {
+  return call<{ href?: string }>(`/v2/invoicing/invoices/${encodeURIComponent(id)}/send`, {
+    method: 'POST',
+    headers: { 'PayPal-Request-Id': requestId },
+    body: { send_to_invoicer: false, send_to_recipient: true },
+  });
+}
+
+/** Finds invoices by our invoice number, to recover one whose creation response was lost. */
+export async function findInvoicesByNumber(invoiceNumber: string): Promise<{ id: string; status: InvoiceStatus }[]> {
+  const res = await call<{ items?: { id: string; status: InvoiceStatus; detail?: { invoice_number?: string } }[] }>(
+    '/v2/invoicing/search-invoices?page=1&page_size=20',
+    { method: 'POST', body: { invoice_number: invoiceNumber } },
+  );
+  // The search is a prefix match on some accounts; keep exact matches only.
+  return (res.items ?? []).filter((i) => i.detail?.invoice_number === invoiceNumber);
+}
+
+/** Lightweight connection check: mints (or reuses) an OAuth token. */
+export async function verifyConnection(): Promise<void> {
+  cachedToken = undefined;
+  await accessToken();
+}
+
+// --- Webhooks ----------------------------------------------------------------------
+
+export type WebhookHeaders = {
+  transmissionId: string | null;
+  transmissionTime: string | null;
+  transmissionSig: string | null;
+  certUrl: string | null;
+  authAlgo: string | null;
+};
+
+/**
+ * Asks PayPal whether a webhook delivery is genuine (POST /v1/notifications/verify-webhook-signature).
+ * The event is passed exactly as received: re-serialising it can change the bytes PayPal signed.
+ */
+export async function verifyWebhookSignature(headers: WebhookHeaders, rawEvent: string, webhookId: string): Promise<boolean> {
+  if (Object.values(headers).some((v) => !v)) return false;
+  const envelope = JSON.stringify({
+    auth_algo: headers.authAlgo,
+    cert_url: headers.certUrl,
+    transmission_id: headers.transmissionId,
+    transmission_sig: headers.transmissionSig,
+    transmission_time: headers.transmissionTime,
+    webhook_id: webhookId,
+  });
+  const res = await call<{ verification_status?: string }>('/v1/notifications/verify-webhook-signature', {
+    method: 'POST',
+    rawBody: `${envelope.slice(0, -1)},"webhook_event":${rawEvent}}`,
+  });
+  return res.verification_status === 'SUCCESS';
+}
 
 // The list omits line items, payments and refunds; the detail endpoint has them.
 export async function listInvoices(): Promise<Invoice[]> {
@@ -220,4 +352,12 @@ export type Balances = {
 
 export function getBalances(): Promise<Balances> {
   return get<Balances>('/v1/reporting/balances');
+}
+
+/** Cancels a sent invoice without notifying anyone (used to clean up abandoned test invoices). */
+export function cancelInvoice(id: string, note: string) {
+  return call<Record<string, never>>(`/v2/invoicing/invoices/${encodeURIComponent(id)}/cancel`, {
+    method: 'POST',
+    body: { subject: 'Invoice cancelled', note, send_to_invoicer: false, send_to_recipient: false },
+  });
 }

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { connection } from 'next/server';
+import { PaymentWatcher } from '@/components/payment-watcher';
 import { Card, Label, PageHeader } from '@/components/ui';
 import { db } from '@/lib/db';
 import { isoDay } from '@/lib/dates';
@@ -30,7 +31,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="flex flex-col">
-      <PageHeader title="Money, moving." subtitle="Your quote-to-cash overview" />
+      <PageHeader title="Money, moving." subtitle="Your quote-to-cash overview" actions={<PaymentWatcher />} />
       <div className="grid grid-cols-4 gap-4 px-6">
         {kpis.map((k) => (
           <Card key={k.label} className="flex h-32 flex-col justify-between p-5">
