@@ -53,6 +53,7 @@ export function NavRail() {
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
   return (
+    // Overflow stays visible: the tooltips sit outside the rail's 72px.
     <nav aria-label="Main" className="flex w-[72px] shrink-0 flex-col items-center border-r border-line bg-shell py-3">
       <Link href="/dashboard" aria-label="quotely home" className="mb-5 flex h-11 items-center">
         <LogoMark className="size-9" />
@@ -62,7 +63,7 @@ export function NavRail() {
           <RailLink key={item.href} item={item} active={isActive(item.href)} />
         ))}
       </div>
-      <div className="mt-auto flex w-full flex-col items-center gap-3">
+      <div className="mt-auto flex w-full shrink-0 flex-col items-center gap-3 pt-4">
         <RailLink item={SETTINGS} active={isActive(SETTINGS.href)} />
         <span
           title="Operator · Northstar Rentals"

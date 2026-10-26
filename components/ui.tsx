@@ -82,7 +82,8 @@ const STATE_PILL: Record<QuoteState, string> = {
   paid: 'bg-state-paid/15 text-state-paid',
 };
 
-const PILL = 'inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[12px] leading-none font-[650] whitespace-nowrap';
+// Colour changes (e.g. Deposit due -> Deposit paid after a payment) ease over 360ms.
+const PILL = 'inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[12px] leading-none font-[650] whitespace-nowrap transition-colors duration-[360ms]';
 
 /** A quote's stage: always text plus colour, never colour alone. */
 export function StatePill({ state }: { state: QuoteState }) {

@@ -11,7 +11,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { AgStudioAiModule, enableStudioDevValidations, type AgReportState, type AgStudioApi, type AgStudioMode } from 'ag-studio';
+import { AgStudioAiModule, enableStudioDevValidations, type AgPanelConfig, type AgReportState, type AgStudioApi, type AgStudioMode } from 'ag-studio';
 import { AgStudio, AgStudioProvider } from 'ag-studio-react';
 import { CalendarIcon, CheckIcon, SettingsIcon } from '@/components/icons';
 import { PaymentWatcher } from '@/components/payment-watcher';
@@ -40,12 +40,12 @@ type Report = AgReportState<QuotelyRegistry>;
 const STORAGE_KEY = `quotely.dashboard.${REPORT_VERSION}`;
 
 // Browser storage can be missing or throw (private windows, blocked storage): fall back quietly.
-function loadLayout(): Report {
+function loadSavedLayout(): Report | null {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) return JSON.parse(saved) as Report;
   } catch {}
-  return cashFlowReport;
+  return null;
 }
 function saveLayout(state: Report | null) {
   try {
@@ -76,8 +76,17 @@ function StudioDashboard({ data, licenseKey, aiModels, paypalConfigured }: Props
   const [mode, setMode] = useState<AgStudioMode>('view');
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [ready, setReady] = useState(false);
-  const [initialState] = useState(loadLayout);
-  const [customised, setCustomised] = useState(() => initialState !== cashFlowReport);
+  // The built-in layout sizes its list widgets to today's data (see ./studio/report.ts).
+  const builtIn = () =>
+    cashFlowReport({
+      debtors: data.debtors.length,
+      receivables: data.receivables.length,
+      nudges: data.nudges.length,
+      nudgesWithReason: data.nudges.filter((n) => n.reason).length,
+    });
+  const [saved] = useState(loadSavedLayout);
+  const [initialState] = useState(() => saved ?? builtIn());
+  const [customised, setCustomised] = useState(saved !== null);
 
   const studioData = useMemo(() => buildStudioData(data), [data]);
   const ai = useMemo(() => (aiModels?.length ? buildAi(aiModels, QUOTELY_PROMPTS) : undefined), [aiModels]);
@@ -92,11 +101,22 @@ function StudioDashboard({ data, licenseKey, aiModels, paypalConfigured }: Props
     if (api) api.setState(next(api.getState()));
   };
 
+  // One filters control in view mode: the header button. Studio's filters panel is only placed
+  // on the canvas while it is open (so no collapsed tab sits at the edge); closing it from its
+  // own chevron closes it here too.
   const toggleFilters = () => {
     const open = !filtersOpen;
     setFiltersOpen(open);
-    updateState((s) => ({ ...s, panels: { ...s.panels, filters: { ...s.panels?.filters, collapsed: !open } } }));
+    if (open) updateState((s) => ({ ...s, panels: { ...s.panels, filters: { ...s.panels?.filters, collapsed: false } } }));
   };
+  const panels = useMemo<AgPanelConfig>(
+    () => ({
+      view: { right: filtersOpen ? ['filters'] : [] },
+      // Declaring `view` turns off Studio's defaults for both modes, so `edit` restates them.
+      edit: { left: ['ai'], right: ['filters', 'edit', 'data'] },
+    }),
+    [filtersOpen],
+  );
 
   const startCustomizing = () => setMode('edit');
 
@@ -118,7 +138,7 @@ function StudioDashboard({ data, licenseKey, aiModels, paypalConfigured }: Props
   const resetLayout = () => {
     saveLayout(null);
     setCustomised(false);
-    apiRef.current?.setState(cashFlowReport);
+    apiRef.current?.setState(builtIn());
     apiRef.current?.clearHistory();
   };
 
@@ -159,6 +179,7 @@ function StudioDashboard({ data, licenseKey, aiModels, paypalConfigured }: Props
             ai={ai}
             initialState={initialState}
             mode={mode}
+            panels={panels}
             layout={{
               widgetBorderEnabled: true,
               widgetBorderColor: '#2B3B3E',
@@ -174,6 +195,9 @@ function StudioDashboard({ data, licenseKey, aiModels, paypalConfigured }: Props
               apiRef.current = event.api as unknown as AgStudioApi<QuotelyRegistry>;
             }}
             onStudioReady={() => setReady(true)}
+            onStateUpdated={(event) => {
+              if (mode === 'view' && filtersOpen && event.state.panels?.filters?.collapsed) setFiltersOpen(false);
+            }}
           />
         </AgStudioProvider>
       </div>

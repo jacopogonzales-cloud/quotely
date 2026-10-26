@@ -1,10 +1,11 @@
 'use client';
 
 // Studio's widget set for the Quotely dashboard: every built-in widget, plus three custom React
-// widgets registered with createWidgets(), plus cell renderers for the receivables grid.
+// widgets registered with createWidgets(), a pre-configured line chart, and cell renderers for
+// the receivables grid.
 
 import type { ComponentType } from 'react';
-import type { AgDefaultWidgetDefinition, AgFormats, AgWidgetData, AgWidgetDataFormat, AgWidgetField } from 'ag-studio';
+import { _ALL_WIDGET_DEFS, type AgDefaultWidgetDefinition, type AgFormats, type AgLineChart, type AgWidgetData, type AgWidgetDataFormat, type AgWidgetField } from 'ag-studio';
 import type { AgAiToolDisplay, AgRegistry, AgWidgetDefinition } from 'ag-studio-react';
 import { createWidgets } from 'ag-studio-react';
 import type { CustomCellRendererProps } from 'ag-grid-react';
@@ -13,13 +14,15 @@ import { MoneyFunnel } from '../widgets/money-funnel';
 import { NudgeActivity } from '../widgets/nudge-activity';
 
 export type QuotelyWidgetType = 'quotely-debtor-scoreboard' | 'quotely-money-funnel' | 'quotely-nudge-activity';
+type CashMovementState = Omit<AgLineChart, 'type'> & { type: 'quotely-cash-movement' };
+type CashMovementDefinition = AgWidgetDefinition<'quotely-cash-movement', CashMovementState>;
 // Saved state of a custom widget: its type, titles and an empty data mapping.
 type CustomState<T extends QuotelyWidgetType> = AgWidgetData<Record<string, never>, AgWidgetDataFormat<unknown>> & { type: T };
 type DefinitionOf<T extends QuotelyWidgetType> = AgWidgetDefinition<T, CustomState<T>>;
 type QuotelyWidgetDefinition = DefinitionOf<'quotely-debtor-scoreboard'> | DefinitionOf<'quotely-money-funnel'> | DefinitionOf<'quotely-nudge-activity'>;
 
 export interface QuotelyRegistry extends AgRegistry {
-  widgets: readonly (AgDefaultWidgetDefinition | QuotelyWidgetDefinition)[];
+  widgets: readonly (AgDefaultWidgetDefinition | QuotelyWidgetDefinition | CashMovementDefinition)[];
   components: Partial<Record<string, never>>;
   aiToolDisplay: AgAiToolDisplay;
   formats: AgFormats;
@@ -74,6 +77,41 @@ const QUOTELY_WIDGETS: QuotelyWidgetDefinition[] = [
   ),
 ];
 
+// --- Cash movement: Studio's line chart with a denser value axis -----------------------
+//
+// Studio 3.0 has no setting for the y-axis tick interval: its format parser drops unknown axis
+// keys, and AG Charts' default (one tick per 50px) leaves only 0 and 5K in a 272px card. Widget
+// `options` are spread over the chart options, so this pre-configured copy of the built-in line
+// chart (same form, same component) supplies its own axes. It is a separate type so that line
+// charts created in Edit mode keep Studio's defaults.
+
+const lineChart = (_ALL_WIDGET_DEFS as Partial<Record<string, unknown>>)['line-chart'];
+
+const compactEuros = (value: number) =>
+  value === 0 ? '0' : Math.abs(value) >= 1000 ? `${(value / 1000).toLocaleString('en-IE', { maximumFractionDigits: 1 })}K` : String(value);
+
+const cashMovementWidget = lineChart && {
+  ...(lineChart as unknown as CashMovementDefinition),
+  id: 'quotely-cash-movement' as const,
+  label: 'Cash movement (line)',
+  extends: 'line-chart' as const,
+  options: {
+    axes: {
+      // Weeks are dates, so the category axis is a time axis, labelled like the rest of the app.
+      x: { type: 'time', label: { format: '%-d %b' }, gridLine: { enabled: false }, line: { stroke: '#2B3B3E', width: 1 } },
+      y: {
+        type: 'number',
+        interval: { minSpacing: 26 },
+        label: { formatter: ({ value }: { value: number }) => compactEuros(value) },
+        gridLine: { enabled: true, style: [{ stroke: '#2B3B3E', strokeWidth: 1 }] },
+      },
+    },
+  },
+  ai: { label: 'Cash movement (line)', description: 'Line chart of weekly money in and money falling due, with a dense value axis.' },
+} satisfies Partial<CashMovementDefinition>;
+
+export const hasCashMovementWidget = Boolean(cashMovementWidget);
+
 // --- Receivables grid cells ------------------------------------------------------------
 
 const text = (p: CustomCellRendererProps) => String(p.valueFormatted ?? p.value ?? '');
@@ -112,7 +150,7 @@ const CELLS: Record<string, ComponentType<CustomCellRendererProps>> = {
 const createCellRenderer = (field: AgWidgetField) => CELLS[field.fieldId] ?? (field.format === 'currencyFormat' ? MoneyCell : undefined);
 
 export const quotelyWidgets = createWidgets<QuotelyRegistry>({
-  additionalTypes: QUOTELY_WIDGETS,
+  additionalTypes: [...QUOTELY_WIDGETS, ...(cashMovementWidget ? [cashMovementWidget as CashMovementDefinition] : [])] as never,
   // Studio 3.0 types `overrides` as never once a registry adds custom widget types (its override
   // type isn't distributive over the union of widget ids); the value is the documented shape.
   overrides: [{ id: 'grid', options: { createCellRenderer } }] as never,

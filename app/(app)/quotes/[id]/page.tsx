@@ -9,6 +9,7 @@ import { Badge, Card, CardTitle, Label, OverduePill, StatePill, cx } from '@/com
 import { DAY_MS, formatDate, formatDateRange, formatDateTime, isoDay } from '@/lib/dates';
 import { formatMoney } from '@/lib/money';
 import { getQuote } from '@/lib/queries';
+import { db } from '@/lib/db';
 import { STAGES, daysOverdue, stageProgress } from '@/lib/quote-state';
 import { QuoteActions } from './quote-actions';
 
@@ -31,6 +32,13 @@ export default async function QuotePage({ params }: PageProps<'/quotes/[id]'>) {
   const late = daysOverdue(quote, now);
   const deposit = quote.invoices.find((i) => i.kind === 'deposit');
   const balance = quote.invoices.find((i) => i.kind === 'balance');
+
+  // A PayPal "paid" notification that arrived but isn't confirmed yet (the webhook re-reads the
+  // invoice from PayPal first; if that call failed, PayPal retries). Never shown as paid until then.
+  const openPayPalIds = quote.invoices.filter((i) => i.paypalInvoiceId && i.status !== 'paid').map((i) => i.paypalInvoiceId!);
+  const verifying =
+    openPayPalIds.length > 0 &&
+    (await db.webhookEvent.count({ where: { type: 'INVOICING.INVOICE.PAID', processed: false, resourceId: { in: openPayPalIds } } })) > 0;
 
   return (
     <div className="flex flex-col gap-5 px-6 py-5">
@@ -72,6 +80,12 @@ export default async function QuotePage({ params }: PageProps<'/quotes/[id]'>) {
 
       <div className="grid grid-cols-[minmax(0,736px)_404px] items-start gap-5">
         <div className="flex min-w-0 flex-col gap-5">
+          {verifying && (
+            <Card className="flex items-center gap-3 border-state-sent/40 px-5 py-4" role="status">
+              <span className="size-4 animate-spin rounded-full border-2 border-state-sent/30 border-t-state-sent" aria-hidden />
+              <span className="font-[650] text-fg">Payment notification received · Verifying with PayPal</span>
+            </Card>
+          )}
           <QuoteActions
             quote={{
               id: quote.id,
@@ -92,7 +106,7 @@ export default async function QuotePage({ params }: PageProps<'/quotes/[id]'>) {
             deposit={deposit ? invoiceSummary(deposit) : null}
             balance={balance ? invoiceSummary(balance) : null}
           />
-          <Timeline quote={quote} activities={quote.activities} />
+          <Timeline quote={quote} activities={quote.activities} recentSince={now.getTime() - 120_000} />
           <LineItems lines={quote.lines} totalCents={quote.totalCents} />
         </div>
 
@@ -170,7 +184,7 @@ function eventTone(a: Activity): 'done' | 'money' | 'agent' | 'problem' {
   return 'done';
 }
 
-function Timeline({ quote, activities }: { quote: TimelineQuote; activities: Activity[] }) {
+function Timeline({ quote, activities, recentSince }: { quote: TimelineQuote; activities: Activity[]; recentSince: number }) {
   const events = activities.filter((a) => SHOWN.has(a.type) || a.type.startsWith('reminder.'));
   const deposit = quote.invoices.find((i) => i.kind === 'deposit');
   const balance = quote.invoices.find((i) => i.kind === 'balance');
@@ -199,6 +213,8 @@ function Timeline({ quote, activities }: { quote: TimelineQuote; activities: Act
               <span
                 className={cx(
                   'relative flex size-7 shrink-0 items-center justify-center rounded-full',
+                  // A payment confirmed in the last two minutes checks in once when the page refreshes.
+                  tone === 'money' && a.at.getTime() > recentSince && 'animate-node-check',
                   tone === 'money' && 'bg-accent text-accent-fg',
                   tone === 'done' && 'bg-surface-3 text-fg',
                   tone === 'agent' && 'bg-state-sent/15 text-state-sent',

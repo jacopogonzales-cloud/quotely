@@ -850,7 +850,12 @@ function SummaryCard({
 
 // --- Approval ------------------------------------------------------------------------
 
-type Sending = { kind: 'idle' } | { kind: 'sending' } | { kind: 'sent'; amountCents: number } | { kind: 'error'; message: string; paypal: boolean };
+type Sending =
+  | { kind: 'idle' }
+  | { kind: 'sending' }
+  | { kind: 'checking' }
+  | { kind: 'sent'; amountCents: number }
+  | { kind: 'error'; message: string; paypal: boolean };
 
 const PAYPAL_FAILED = 'PayPal couldn’t send this invoice. No payment was requested.';
 
@@ -894,13 +899,13 @@ function ApproveDialog({
 
   // After a PayPal failure the quote is approved: retrying reconciles the same invoice.
   const retry = async () => {
-    setStatus({ kind: 'sending' });
+    setStatus({ kind: 'checking' });
     const result = await retryInvoiceAction(quoteId, 'deposit');
     if (result.ok) finish(result.data.amountCents);
     else setStatus({ kind: 'error', message: result.error, paypal: true });
   };
 
-  const sending = status.kind === 'sending' || status.kind === 'sent';
+  const sending = status.kind === 'sending' || status.kind === 'checking' || status.kind === 'sent';
   const failedAtPayPal = status.kind === 'error' && status.paypal;
 
   return (
@@ -916,7 +921,11 @@ function ApproveDialog({
       title="Ready to request the deposit?"
       dismissible={!sending}
       footer={
-        failedAtPayPal ? (
+        status.kind === 'checking' ? (
+          <Button variant="primary" disabled>
+            Checking invoice status…
+          </Button>
+        ) : failedAtPayPal ? (
           <>
             <Button onClick={() => router.push(`/quotes/${quoteId}`)}>View quote</Button>
             <Button variant="primary" onClick={retry}>

@@ -396,6 +396,8 @@ async function main() {
         // Only quotes with (fake) invoices are demo-only; the draft can be approved live.
         seeded: Boolean(q.deposit),
         approvedAt: q.approvedAt,
+        // The deposit invoice's due date (the draft's default payment terms: in 7 days).
+        depositDueDate: q.deposit?.dueDate ?? at(7, 12),
         completedAt: q.completedAt,
         paidAt,
         createdAt: new Date(q.request.receivedAt.getTime() + 3_600_000),

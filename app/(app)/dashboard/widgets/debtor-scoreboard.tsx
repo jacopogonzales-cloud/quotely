@@ -29,13 +29,15 @@ export function DebtorScoreboard(params: AgWidgetParams) {
   return (
     // A container query lets the rows shed detail when the widget is narrow (e.g. edit panels open).
     <div className={`@container flex flex-col ${WIDGET_BODY}`}>
-      <ul className="min-h-0 flex-1 overflow-y-auto">
+      {/* Rows share the height the canvas row gives the widget (48 to 64px each), so a short
+          list fills the card instead of leaving a gap above the footer. */}
+      <ul className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {rows.map((d) => (
-          <li key={d.quoteId}>
+          <li key={d.quoteId} className="flex min-h-12 flex-1">
             <button
               type="button"
               onClick={() => navigate(`/quotes/${d.quoteId}`)}
-              className="group grid h-12 w-full grid-cols-[32px_minmax(96px,1fr)_auto_auto_16px] items-center gap-3 rounded-control px-2 text-left transition-colors duration-[120ms] hover:bg-surface-3 @[560px]:grid-cols-[32px_minmax(96px,1fr)_auto_auto_56px_16px]"
+              className="group grid h-full max-h-16 min-h-12 w-full grid-cols-[32px_minmax(96px,1fr)_auto_auto_16px] items-center gap-3 rounded-control px-2 text-left transition-colors duration-[120ms] hover:bg-surface-3 @[560px]:grid-cols-[32px_minmax(96px,1fr)_auto_auto_56px_16px]"
             >
               <span className="flex size-8 items-center justify-center rounded-full border border-line-strong bg-surface-2 text-[11px] font-bold text-fg-2">
                 {monogram(d.company)}

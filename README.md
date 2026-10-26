@@ -1,91 +1,185 @@
-> [!TIP]
-> **PayPal AI Hackathon**
-> 
-> Win part of $69,750 in total prizes
-> 
-> Build What's Next with PayPal and AI is a global online hackathon inviting developers, designers, founders, students, and builders to create something new using PayPal and AI.
-> 
-> There are no prescribed problem statements and no set of tracks. Build an agent, an app, an automation, a new payment experience, a business tool, a social product, or something we haven't thought of yet.
-> 
-> https://paypalaihackathon.devpost.com
+# quotely
 
-# PayPal SDK data pages
+**From request to cash, on autopilot.**
 
-A Next.js app that reads PayPal sandbox data over the [PayPal REST API](https://developer.paypal.com/api/rest/) and shows it two ways:
+Quotely is an AI quote-to-cash app for small B2B service businesses: equipment rental, catering, event agencies, AV installers. A customer email becomes a priced quote, the quote becomes a PayPal deposit invoice, the finished job becomes a balance invoice, and a reminder agent chases what is late, until the money is in.
 
-- **Endpoint pages**: one [AG Grid](https://www.ag-grid.com/react-data-grid/) per PayPal endpoint the demo calls, showing what each returns.
-- **Dashboard** (`/dashboard`): an [AG Studio](https://www.ag-grid.com/studio/) report over all of that data, joined together, which you can edit and save in the browser.
+Built for the [PayPal AI Hackathon](https://paypalaihackathon.devpost.com) on the [PayPal × AG Grid boilerplate](https://github.com/paypaldev/hackathon-paypal-ag-grid-boilerplate).
 
-## Run locally
+![Dashboard](docs/screenshots/dashboard.png)
 
-Requires Node.js 20.9 or later and a PayPal sandbox REST app ([developer.paypal.com](https://developer.paypal.com/dashboard/applications/sandbox)). The transactions and balances pages also need the app's **Transaction search** feature enabled.
+## What it does
+
+1. **A request arrives.** Paste a customer email into the inbox.
+2. **AI drafts the quote.** OpenAI reads the request, extracts the customer, job dates, place and line items, and matches each item to the company price list. It never invents a price: anything not on the price list is flagged *Needs a price* and blocks approval.
+3. **The operator reviews.** Every line is editable inline; the source email sits next to the quote with each extracted phrase highlighted and linked to its line.
+4. **Approve → deposit invoice.** Quotely creates and sends a PayPal invoice for the deposit (30% by default) through the PayPal Invoicing API.
+5. **Payment is detected.** A PayPal webhook (signature-verified) and a 30-second reconciliation both confirm payments with PayPal before anything changes. The quote moves to *Deposit paid* and a "Payment received" toast appears.
+6. **Job done → balance invoice.** One click sends the remaining balance as a second PayPal invoice. One invoice per stage, never duplicates.
+7. **The nudge agent chases.** It drafts friendly reminders with AI for deposits about to fall due and balances past due, schedules them for 09:00 Milan time, and stops as soon as PayPal confirms payment.
+8. **The dashboard shows money in motion.** An AG Studio canvas with KPIs, weekly cash movement, a money-flow funnel, a "who owes what" scoreboard, the agent's activity and a receivables ledger, all editable in Studio's Edit mode.
+
+| Inbox | Quote builder | Quote detail |
+|---|---|---|
+| ![Inbox](docs/screenshots/inbox.png) | ![Quote builder](docs/screenshots/quote-builder.png) | ![Quote detail](docs/screenshots/quote-detail.png) |
+
+## Tools used
+
+| Tool | How Quotely uses it |
+|---|---|
+| **PayPal Invoicing API v2** (sandbox) | Create draft invoices, send them, read their status, search by invoice number (to recover safely after a failure), cancel. `lib/paypal.ts` |
+| **PayPal Webhooks** | `INVOICING.INVOICE.PAID` and `INVOICING.INVOICE.CANCELLED` at `POST /api/paypal/webhook`, verified with `POST /v1/notifications/verify-webhook-signature`, then re-confirmed by reading the invoice. |
+| **PayPal OAuth 2.0** | Client-credentials token, cached until just before expiry. The *Verify connection* button in Settings mints one. |
+| **AG Studio** (`ag-studio`, `ag-studio-react` 3.0) | The dashboard: `AgStudioProvider`, a saved report as initial state, native KPI / line / grid / donut widgets, three custom React widgets registered with `createWidgets`, the dark theme via `studioTheme.withParams`, real Edit mode and the AI Assistant. |
+| **OpenAI Responses API** | Quote extraction with strict structured JSON output, and reminder drafting. One model, `gpt-5.6-luna`, set in `lib/ai/index.ts`; prompts in `lib/ai/prompts.ts`. The key never reaches the browser. |
+| **Next.js 16** (App Router) | Server components, server actions, route handlers, `after()` for the agent run, route-level loading and error states. |
+| **Prisma + SQLite** | `prisma/dev.db` locally; the schema is portable to PostgreSQL (integer cents, no native types). |
+| **Tailwind CSS 4** | The "Obsidian × Lime" dark theme from `docs/design-system.md`, as CSS tokens. |
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph Browser
+    UI[Inbox · Builder · Quote detail · Settings]
+    Studio[AG Studio dashboard]
+  end
+  subgraph Next.js server
+    SA[Server actions]
+    WH["/api/paypal/webhook"]
+    RC["/api/paypal/reconcile"]
+    NG["/api/agent/nudge"]
+    AIP["/api/ai/responses (Studio AI proxy)"]
+    Billing[lib/billing.ts<br/>approve · issueInvoice · markInvoicePaid]
+    Agent[lib/agent/nudge.ts]
+    Extract[lib/ai/extract.ts]
+    DB[(Prisma · SQLite)]
+  end
+  PayPal[(PayPal sandbox)]
+  OpenAI[(OpenAI)]
+
+  UI --> SA
+  Studio --> SA
+  Studio --> AIP --> OpenAI
+  SA --> Extract --> OpenAI
+  SA --> Billing
+  SA -- every 30 s --> Billing
+  SA -- every 60 s, after response --> Agent
+  WH --> Billing
+  RC --> Billing
+  NG --> Agent --> OpenAI
+  Agent --> Billing
+  Billing <--> PayPal
+  PayPal -- webhook --> WH
+  Billing --> DB
+  Agent --> DB
+  Extract --> DB
+```
+
+**Money rules worth knowing**
+
+- Money is stored as integer cents, EUR only.
+- Prices come only from the price list or the operator. The model never sees or returns prices; its SKUs are checked against the price list and its quoted phrases must appear verbatim in the email.
+- One invoice per stage: the invoice row is reserved before PayPal is called (unique on quote + stage), so double clicks and retries find it instead of creating another. A retry first searches PayPal by Quotely's unique invoice number (e.g. `Q-1042-D-QXT9`).
+- *Paid* means PayPal says `PAID`, in EUR, for the full amount, on a fresh read of the invoice. Webhook and polling both end in the same idempotent `markInvoicePaid()`. A webhook body alone never marks anything paid.
+- Every state change is written to an activity log with its actor: operator, PayPal, agent or system.
+- Reminders are drafted and logged, never emailed (v1). PayPal itself sends the sandbox invoice emails.
+
+**Quote states**: `draft → approved → deposit_due → deposit_paid (= in_progress) → balance_due → paid`. *Overdue* is a flag computed from due dates, not a state.
+
+```
+app/(app)/            Inbox, quote builder, quote detail, quotes list, settings, dashboard
+app/(app)/dashboard/  AG Studio: data sources, report state, theme, custom widgets
+app/api/paypal/       Webhook and reconciliation endpoints
+app/api/agent/nudge/  Nudge agent endpoint
+app/debug/            The boilerplate's original pages (raw PayPal endpoints, demo dashboard)
+lib/paypal.ts         Every PayPal call (sandbox host fixed)
+lib/billing.ts        Approval, invoices, payments, reconciliation
+lib/agent/            The nudge agent and reminder text
+lib/ai/               Model config, prompts, structured-output calls, extraction
+lib/drafting.ts       Requests and draft quotes
+lib/cashflow.ts       The dashboard's data
+prisma/               Schema and seed (Northstar Rentals, Milan)
+docs/                 Design system and PayPal sandbox testing guide
+```
+
+## Setup
+
+Requires Node.js 20.9+ and a PayPal sandbox REST app ([developer.paypal.com](https://developer.paypal.com/dashboard/applications/sandbox)).
 
 ```bash
-npm install
-cp env.example .env.local   # then fill in the values
+npm install                  # also generates the Prisma client
+cp env.example .env.local    # then fill in the values below
+npm run db:reset             # create prisma/dev.db and load the demo data
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Next.js only loads the dotted `.env.local`; it is git-ignored, so credentials stay out of the repo.
+Open http://localhost:3000 (it lands on the dashboard). `.env.local` is git-ignored.
 
-Other scripts: `npm run build` (production build), `npm run start` (serve the build), `npm run lint`.
+### Environment variables
 
-### AG Studio licence (optional)
-
-Set `AG_STUDIO` in `.env.local` to your AG Studio licence key. The dashboard passes it to `AgStudioProvider`.
-
-### AI assistant (optional)
-
-The AG Studio dashboard at `/dashboard` has an AI assistant backed by OpenAI. The key is taken from the first of these that is set; with neither, the assistant is hidden:
-
-1. `AG_STUDIO_OPENAI_API_KEY`, specific to this app. Put it in `.env.local` to choose the key for this demo.
-2. `OPENAI_API_KEY`, the name OpenAI's own tools use. If you already export one (e.g. in `~/.zshrc`), the demo uses it with no setup, and spends against it.
-
-A separate name is needed because Next.js prefers variables already in the environment over `.env.local`, so a globally exported `OPENAI_API_KEY` can't be overridden per project. The server logs which variable it used (never the key) the first time the assistant is configured.
-
-`OPENAI_MODELS` lists the model ids the assistant may use, comma-separated, first one the default (`gpt-5.4-mini` when unset); with two or more, the chat offers a model picker.
-
-The key never reaches the browser. Studio's adapter ([`openai-adapter.ts`](app/dashboard/studio/openai-adapter.ts), copied from the AG Studio docs) runs client-side and posts to this app's own [`/api/ai/responses`](app/api/ai/responses/route.ts), which adds the key, only allows the configured models, caps output tokens, and streams OpenAI's reply back.
-
-In production `.env.local` isn't deployed: set the variable in your host's environment (e.g. Vercel project settings, `docker run --env-file`, or a secrets manager), as with the PayPal credentials. The route has no auth or rate limiting, so don't deploy it publicly with a real key without adding one.
-
-## How it works
-
-```
-lib/paypal.ts            Every PayPal call: OAuth token, paging, retries, response types
-lib/dashboard-data.ts    Turns those responses into the dashboard's related tables
-app/(endpoints)/         One page per endpoint, each rendering an AG Grid
-app/dashboard/           The AG Studio dashboard
-app/api/ai/responses/    Server-side proxy for the dashboard's AI assistant
-```
-
-[`lib/paypal.ts`](lib/paypal.ts) calls the REST API with plain `fetch`, no SDK. It gets an OAuth access token with the client-credentials grant and caches it until just before it expires. It follows `page`/`total_pages` paging, and retries on 401, 429 and 5xx responses. Its types are hand-written for the fields this demo reads, in the API's own snake_case.
-
-Every page is a server component that calls `await connection()`, so it renders per request with live data instead of being prerendered at build time. PayPal credentials never leave the server.
-
-## Endpoint pages
-
-Each page in [`app/(endpoints)`](app/(endpoints)) calls one function in `lib/paypal.ts`, maps the response to flat rows, and passes them with plain column definitions to the shared [`DataGrid`](app/(endpoints)/data-grid.tsx). The page header shows the REST calls behind it.
-
-| Page | `lib/paypal.ts` function | REST calls |
+| Variable | Required | What it is |
 |---|---|---|
-| [`/products`](app/(endpoints)/products/page.tsx) | `listProducts()` | `GET /v1/catalogs/products`, then `GET /v1/catalogs/products/{id}` per product |
-| [`/plans`](app/(endpoints)/plans/page.tsx) | `listPlans()` | `GET /v1/billing/plans`, then `GET /v1/billing/plans/{id}` per plan |
-| [`/invoices`](app/(endpoints)/invoices/page.tsx) | `listInvoices()` | `GET /v2/invoicing/invoices`, then `GET /v2/invoicing/invoices/{id}` per invoice |
-| [`/transactions`](app/(endpoints)/transactions/page.tsx) | `searchTransactions(start, end)` | `GET /v1/reporting/transactions` |
-| [`/balances`](app/(endpoints)/balances/page.tsx) | `getBalances()` | `GET /v1/reporting/balances` |
+| `PAYPAL_CLIENT_ID`, `PAYPAL_SECRET` | yes | Sandbox REST app credentials. |
+| `PAYPAL_WEBHOOK_ID` | for webhooks | The webhook's ID from the PayPal dashboard. Without it, webhook events are accepted unverified in development only; payments are still detected by polling. |
+| `QUOTELY_CRON_SECRET` | in production | Shared secret for `x-quotely-cron` on `/api/paypal/reconcile` and `/api/agent/nudge`. Open in development when unset. |
+| `AG_STUDIO_OPENAI_API_KEY` (or `OPENAI_API_KEY`) | for AI | OpenAI key for quote drafting, reminders and the Studio assistant. Without it, quotes can be created manually. |
+| `OPENAI_MODELS` | no | Models the Studio assistant may offer, comma-separated (first is the default). |
+| `AG_STUDIO` | no | AG Studio licence key; without it Studio shows a trial watermark. |
+| `DATABASE_URL` | no | Leave blank for `prisma/dev.db`. For PostgreSQL, set it and change `provider` in `prisma/schema.prisma`. |
 
-Things worth knowing about these endpoints:
+### Scripts
 
-- **List endpoints return summaries.** Products have no type or category, plans no billing cycles, and invoices no line items, payments or refunds. So each record is fetched again in full, which is why these pages take a second or two.
-- **Billing plans keep their price in `billing_cycles`.** There is an optional `TRIAL` cycle, then the `REGULAR` cycle; `total_cycles: 0` means it bills until cancelled.
-- **Transaction Search covers at most 31 days per request** and rejects fractional seconds in dates. New activity can take up to three hours to appear. `fields=all` adds `payer_info` to each `transaction_info`. Event codes are [PayPal T-codes](https://developer.paypal.com/docs/transaction-search/transaction-event-codes/) (`T0001` = payout); status is `S` success, `P` pending, `D` denied, `V` reversed or `F` partially refunded.
-- **Amounts are decimal strings with a currency**, e.g. `{ "value": "2.99", "currency_code": "USD" }`. `amountOf()` turns them into numbers, and the grid formats money columns in each row's currency.
+| Command | Does |
+|---|---|
+| `npm run dev` / `build` / `start` / `lint` | The usual Next.js scripts. |
+| `npm run db:push` | Sync the schema to the database. |
+| `npm run db:seed` | Replace all data with the demo data (dates are relative to today). |
+| `npm run db:reset` | Recreate the database and seed it. |
 
-### The grid
+The demo company is **Northstar Rentals** (Milan) with customers from an events agency, catering companies and an AV installer: 11 price-list items, 3 new requests (including Studio Marconi: 4 × 65" displays, 2 mic kits, delivery and setup, €2,800.00, deposit €840.00), and 6 quotes across every stage including an overdue balance and a fully paid job. Seeded quotes with invoices are marked *Demo data* and never talk to PayPal; only quotes created in the app do.
 
-Pages are server components, so the column definitions they pass to the grid must be plain data, with no functions. Money columns use the `type: 'money'` column type, defined in `data-grid.tsx`, which formats the value in the row's `currency`. Date columns use AG Grid's built-in `cellDataType: 'dateString'` or `'dateTimeString'`. Every column can be sorted and filtered, and the search box filters across all columns.
+## Testing the payment flow
 
-## Dashboard
+[`docs/paypal-sandbox-testing.md`](docs/paypal-sandbox-testing.md) walks through it step by step: draft the Studio Marconi quote, approve it, pay the deposit invoice as the sandbox buyer, watch it arrive, complete the job and pay the balance. It also covers registering the webhook through ngrok (`https://<your-ngrok-host>/api/paypal/webhook`, events *Invoicing invoice paid* and *Invoicing invoice cancelled*).
 
-[`/dashboard`](app/dashboard/page.tsx) fetches all five endpoints at once. [`lib/dashboard-data.ts`](lib/dashboard-data.ts) turns them into related tables: customers, invoices, invoice line items, invoice payments, products, plans, transactions, payouts and balances. AG Studio's data sources, relationships, theme, default report and AI assistant are configured in [`app/dashboard/studio`](app/dashboard/studio). Reports you create or edit are saved in the browser's localStorage.
+The scheduler endpoints can be called from any cron:
+
+```bash
+curl -X POST http://localhost:3000/api/paypal/reconcile -H "x-quotely-cron: $QUOTELY_CRON_SECRET"
+curl -X POST http://localhost:3000/api/agent/nudge     -H "x-quotely-cron: $QUOTELY_CRON_SECRET"
+```
+
+## AG Studio notes
+
+The dashboard follows `docs/design-system.md`. Where AG Studio 3.0.0 has no matching setting, the closest documented option is used:
+
+| Design doc | In Studio 3.0.0 | Used instead |
+|---|---|---|
+| `chromeBackgroundColor` | Exists but is excluded from Studio's theme API | Shell colour on the panel containers (`studioPanelContainerBackgroundColor`). |
+| Grid background | No `gridBackgroundColor` | `gridDataBackgroundColor` and `gridOddRowBackgroundColor`. |
+| 16px widget gaps, 18px widget padding | No gap parameter; inner padding fixed | `layout.widgetPadding: 8` (8px around each widget = 16px gaps); about 8px inside. |
+| Font weights 600 / 650 | Widget typography is `normal` or `bold` | `bold`. |
+| Dashed "expected" line | No per-series line style | Three solid series: deposits received (teal), balances received (lime), expected (blue). |
+| Palette order 1–6 | Colours are assigned in palette order | Teal and lime first, so deposits are always teal and balances lime on both the line and the donut. |
+| Y-axis tick interval | The format parser drops unknown axis keys | A pre-configured copy of the built-in line chart (`quotely-cash-movement`, from Studio's `_ALL_WIDGET_DEFS`) whose widget `options` set the axes, including `interval.minSpacing`. Line charts created in Edit mode keep Studio's defaults. If that export disappears in a later Studio version, the report falls back to the plain line chart. |
+| Overdue rows tinted | No row-style hook in the grid widget | The Stage cell renderer adds a marker; a CSS `:has()` rule tints the row. |
+| "Sum" labels | Aggregated fields show "(sum)" | Named measures (expressions), e.g. *Deposits received*. |
+| Custom widget data | Studio's `context` is read once | Custom widgets read live data from a small store the page updates. |
+
+Edit mode: *Customize dashboard* switches Studio to Edit mode with the AI Assistant folded away so the canvas fits at 1440px; *Done customizing* keeps the layout in this browser; *Reset layout* restores the built-in one. Widgets move by dropping them on free canvas space. The built-in layout sizes the list widgets to the data they hold.
+
+## Security and limits (v1)
+
+- Single operator, no login. Server actions and routes validate every input, but do not deploy publicly with real credentials without adding authentication.
+- PayPal sandbox only; the API host is hard-coded.
+- No email is sent by Quotely. Reminders are logged and shown in the app.
+- Prices in EUR only, no VAT handling.
+
+## Debug pages
+
+The boilerplate's original pages are kept under [`/debug`](http://localhost:3000/debug): raw PayPal endpoints in AG Grid (`/products`, `/plans`, `/invoices`, `/transactions`, `/balances`) and its demo AG Studio dashboard (`/debug/dashboard`).
+
+## License
+
+[MIT](LICENSE)
