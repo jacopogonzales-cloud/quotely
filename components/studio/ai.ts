@@ -4,8 +4,8 @@
 import { createAiHarness, type AgAiHarnessSetup, type AgAiPromptStarter } from 'ag-studio';
 import { openaiAdapter } from './openai-adapter';
 
-// Suggestions shown in a new AI conversation, before anything has been typed.
-const PROMPT_STARTERS: AgAiPromptStarter[] = [
+// Suggestions shown in a new AI conversation, before anything has been typed (boilerplate dashboard).
+export const PAYPAL_PROMPT_STARTERS: AgAiPromptStarter[] = [
   {
     label: 'Summarise this page',
     prompt: 'Summarise what this page shows: every widget, the fields it reads, and what stands out.',
@@ -22,13 +22,13 @@ const PROMPT_STARTERS: AgAiPromptStarter[] = [
 
 // `models` are the ids allowed by OPENAI_MODELS on the server; the first is the default, and the
 // picker only shows for two or more.
-export function buildAi(models: string[]): AgAiHarnessSetup {
+export function buildAi(models: string[], promptStarters: AgAiPromptStarter[] = PAYPAL_PROMPT_STARTERS): AgAiHarnessSetup {
   const adapter = openaiAdapter({ endpoint: '/api/ai', model: models[0] });
 
   return ({ api }) =>
     createAiHarness(api, {
       adapter,
-      promptStarters: PROMPT_STARTERS,
+      promptStarters,
       models: models.length > 1 ? models.map((id) => ({ id, label: id })) : undefined,
     });
 }

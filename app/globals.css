@@ -204,3 +204,14 @@ dialog[open] {
 dialog::backdrop {
   background: rgba(4, 7, 8, 0.72);
 }
+
+/* Receivables ledger (AG Studio grid widget): rows holding an overdue marker are tinted. The
+   marker is rendered by the Stage cell renderer in app/(app)/dashboard/studio/widgets.tsx. */
+.ag-row:has(.quotely-overdue-row) {
+  background-color: rgb(255 140 145 / 0.06);
+}
+
+/* The dashboard's skeleton uses Studio's 24-track grid. */
+.grid-cols-24 {
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+}

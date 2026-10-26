@@ -1,6 +1,6 @@
 import { aiModels, OPENAI_RESPONSES_URL, openAiKey } from '@/lib/ai';
 
-// Proxy for AG Studio's OpenAI adapter (app/debug/dashboard/studio/openai-adapter.ts). The adapter
+// Proxy for AG Studio's OpenAI adapter (components/studio/openai-adapter.ts). The adapter
 // runs in the browser and POSTs to `${endpoint}/responses`; with its endpoint set to /api/ai it lands
 // here. This adds the server's OpenAI key (see lib/ai/index.ts), forwards the body to the OpenAI Responses API and
 // streams the SSE reply straight back, so the adapter works unchanged and the key never leaves the

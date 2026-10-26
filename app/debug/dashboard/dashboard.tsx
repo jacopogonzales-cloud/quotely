@@ -45,7 +45,7 @@ import { pagesFor, pageTitlesFor } from './page-titles';
 import { ReportsSidebar } from './components/sidebar';
 import { DashboardSkeleton } from './components/skeleton';
 import * as reportState from './report-state';
-import { buildAi } from './studio/ai';
+import { buildAi } from '@/components/studio/ai';
 import { buildStudioData, hasData } from './studio/data';
 import { agStudioPayPalTheme } from './studio/theme';
 import { useReports } from './use-reports';
