@@ -237,6 +237,23 @@ export async function issueInvoice(quoteId: string, kind: InvoiceKind, dueDate?:
 
 // --- Payments ------------------------------------------------------------------------
 
+/**
+ * When the customer paid. PayPal's payment_date is often a bare date ("2026-10-26"), which would
+ * read as midnight UTC; then the moment we recorded the payment is the honest time. Never before
+ * the invoice was sent, never in the future.
+ */
+export function paymentTime(confirmed: PayPalInvoice, sentAt: Date | null, now = new Date()): Date {
+  const latest = confirmed.payments?.transactions
+    ?.map((t) => t.payment_date)
+    .filter((d): d is string => Boolean(d) && /T\d{2}:\d{2}/.test(d!) && !Number.isNaN(Date.parse(d!)))
+    .map((d) => new Date(d))
+    .sort((a, b) => a.getTime() - b.getTime())
+    .at(-1);
+  let at = latest ?? now;
+  if (sentAt && at < sentAt) at = now < sentAt ? sentAt : now;
+  return at > now ? now : at;
+}
+
 export type PaidResult = { changed: boolean; quoteId?: string; kind?: InvoiceKind; amountCents?: number; reason?: string };
 
 /**
@@ -255,8 +272,7 @@ export async function markInvoicePaid(paypalInvoiceId: string, confirmed: PayPal
     return { changed: false, quoteId: row.quoteId, kind: row.kind, reason: `not paid (${confirmed.status}, ${paidCents} of ${row.amountCents})` };
   }
 
-  const paidAtRaw = confirmed.payments?.transactions?.map((t) => t.payment_date).filter(Boolean).sort().at(-1);
-  const paidAt = paidAtRaw && !Number.isNaN(Date.parse(paidAtRaw)) ? new Date(paidAtRaw) : new Date();
+  const paidAt = paymentTime(confirmed, row.sentAt);
   const label = LABEL[row.kind];
 
   const changed = await db.$transaction(async (tx) => {

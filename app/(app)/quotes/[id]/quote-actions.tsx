@@ -29,6 +29,7 @@ type Props = {
     defaultBalanceDue: string;
     today: string;
     lateDays: number;
+    nextReminder: string | null;
   };
   deposit: InvoiceSummary | null;
   balance: InvoiceSummary | null;
@@ -112,6 +113,7 @@ export function QuoteActions({ quote, deposit, balance }: Props) {
                 : 'Deposit invoice not created yet'
             }
             link={deposit?.payerViewUrl}
+            reminder={quote.nextReminder}
           />
           {sentNote}
         </Panel>
@@ -179,6 +181,7 @@ export function QuoteActions({ quote, deposit, balance }: Props) {
                 : ''
             }
             link={balance?.payerViewUrl}
+            reminder={quote.nextReminder}
           />
           {sentNote}
         </Panel>
@@ -214,7 +217,7 @@ function Panel({ tone, children }: { tone: 'neutral' | 'success' | 'warning' | '
   );
 }
 
-function Waiting({ title, detail, link }: { title: string; detail: string; link?: string | null }) {
+function Waiting({ title, detail, link, reminder }: { title: string; detail: string; link?: string | null; reminder?: string | null }) {
   return (
     <div className="flex items-center justify-between gap-4">
       <div className="flex items-start gap-3">
@@ -222,6 +225,7 @@ function Waiting({ title, detail, link }: { title: string; detail: string; link?
         <div>
           <div className="font-[650] text-fg">{title}</div>
           {detail && <p className="mt-0.5 text-[13px] text-fg-2">{detail}</p>}
+          {reminder && <p className="mt-1 text-[12px] font-[650] text-state-sent">{reminder}</p>}
         </div>
       </div>
       {link && (

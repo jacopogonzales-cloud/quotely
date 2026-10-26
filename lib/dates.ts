@@ -47,3 +47,18 @@ export function formatRelative(d: Date | string, now = new Date()) {
 /** Whole calendar days from `a` to `b` in the business time zone (positive when b is later). */
 export const daysBetween = (a: Date | string, b: Date | string) =>
   Math.round((Date.parse(isoDay(b)) - Date.parse(isoDay(a))) / DAY_MS);
+
+/** "2026-10-29" + 2 -> "2026-10-31" (calendar arithmetic, no time zone involved). */
+export const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T12:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);
+
+/** The instant it is `hour`:00 on `day` in the business time zone, e.g. 09:00 in Milan. */
+export function zonedTime(day: string, hour: number): Date {
+  const guess = new Date(`${day}T${String(hour).padStart(2, '0')}:00:00Z`);
+  // Offset of the zone at that moment, e.g. "GMT+1" / "GMT+2".
+  const name = new Intl.DateTimeFormat('en-US', { timeZone: TIME_ZONE, timeZoneName: 'shortOffset' })
+    .formatToParts(guess)
+    .find((p) => p.type === 'timeZoneName')?.value;
+  const m = name?.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/);
+  const offsetMin = m ? (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3] ?? 0)) : 0;
+  return new Date(guess.getTime() - offsetMin * 60_000);
+}

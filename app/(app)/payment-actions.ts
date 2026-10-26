@@ -4,7 +4,9 @@
 // ./actions.ts); every state change is re-validated in lib/billing.ts.
 
 import { revalidatePath } from 'next/cache';
+import { after } from 'next/server';
 import type { InvoiceKind } from '@prisma/client';
+import { runNudgeAgent } from '@/lib/agent/nudge';
 import { approveQuote, BillingError, completeJob, issueInvoice, reconcileOpenInvoices } from '@/lib/billing';
 import { db } from '@/lib/db';
 import type { ActionResult } from './actions';
@@ -56,8 +58,9 @@ export async function completeJobAction(quoteId: string, dueDate: string): Promi
 export type PaymentUpdate = { quoteId: string; quoteNumber: string; customer: string; kind: InvoiceKind; amountCents: number };
 
 // Pages poll every 30 s; with several tabs open, PayPal is still asked at most every 10 s
-// (2 s for a manual refresh).
+// (2 s for a manual refresh), and the nudge agent runs at most once a minute.
 let lastRun = 0;
+let lastNudge = 0;
 
 /**
  * Reconciles open invoices with PayPal, then reports every payment recorded after `since`
@@ -84,6 +87,14 @@ export async function refreshPaymentsAction(
     }
   }
 
+  // The nudge agent rides on the same timer (at most once a minute), right after reconciling,
+  // so reminders always see the latest payment status. It drafts with AI, so it runs after the
+  // response: the page learns about payments without waiting for reminder drafts.
+  if (now.getTime() - lastNudge >= 60_000) {
+    lastNudge = now.getTime();
+    after(() => runNudgeAgent({ reconcile: false }).catch((err) => console.error('[quotely] nudge agent failed:', err)));
+  }
+
   // markInvoicePaid stamps lastSyncedAt when it records a payment; paid invoices are not re-synced after.
   const paid = await db.invoice.findMany({
     where: { status: 'paid', seeded: false, lastSyncedAt: { gt: sinceDate, lte: now } },
@@ -100,4 +111,17 @@ export async function refreshPaymentsAction(
     return { ok: false, error: 'Payment status couldn’t be refreshed. Your invoice remains unchanged.' };
   }
   return { ok: true, data: { payments, now: now.toISOString() } };
+}
+
+/** Settings > Reminder rules: run the agent now and report what it did. */
+export async function runNudgeNowAction(): Promise<ActionResult<{ sent: number; scheduled: number; skipped: number; failed: number }>> {
+  try {
+    const r = await runNudgeAgent();
+    revalidatePath('/settings');
+    revalidatePath('/quotes');
+    return { ok: true, data: { sent: r.sent, scheduled: r.scheduled, skipped: r.skipped, failed: r.failed } };
+  } catch (err) {
+    console.error('[quotely] nudge agent failed:', err);
+    return { ok: false, error: 'The agent couldn’t run. Nothing was sent.' };
+  }
 }

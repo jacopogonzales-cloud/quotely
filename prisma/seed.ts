@@ -472,7 +472,8 @@ async function main() {
               ? `Hi ${c.contactName.split(' ')[0]}, a friendly reminder that the ${r.kind} of ${eur(amountCents)} for ${q.title} is ${r.rule === 'balance_overdue' ? 'now past due' : 'due soon'}. You can pay securely with the PayPal link in the invoice. Thank you! Northstar Rentals`
               : null,
           amountCents,
-          day: isoDay(r.at),
+          // A scheduled reminder belongs to the day it will go out; the others to the day they happened.
+          day: isoDay(r.scheduledFor ?? r.at),
           scheduledFor: r.scheduledFor,
           createdAt: r.at,
         },

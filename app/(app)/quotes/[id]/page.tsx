@@ -87,6 +87,7 @@ export default async function QuotePage({ params }: PageProps<'/quotes/[id]'>) {
               defaultBalanceDue: isoDay(new Date(now.getTime() + 7 * DAY_MS)),
               today: isoDay(now),
               lateDays: late,
+              nextReminder: nextReminderLabel(quote.reminders),
             }}
             deposit={deposit ? invoiceSummary(deposit) : null}
             balance={balance ? invoiceSummary(balance) : null}
@@ -103,6 +104,14 @@ export default async function QuotePage({ params }: PageProps<'/quotes/[id]'>) {
       </div>
     </div>
   );
+}
+
+/** "Reminder scheduled for 29 Oct, 09:00", from the agent's real schedule. */
+function nextReminderLabel(reminders: Reminder[]) {
+  const next = reminders
+    .filter((r) => r.outcome === 'scheduled' && r.scheduledFor)
+    .sort((a, b) => a.scheduledFor!.getTime() - b.scheduledFor!.getTime())[0];
+  return next ? `Reminder scheduled for ${formatDateTime(next.scheduledFor!)}` : null;
 }
 
 const invoiceSummary = (i: Invoice) => ({
@@ -392,10 +401,20 @@ function Reminders({ reminders }: { reminders: Reminder[] }) {
                 {r.outcome === 'scheduled' && r.scheduledFor ? `for ${formatDateTime(r.scheduledFor)}` : formatDateTime(r.createdAt)}
                 {r.reason ? ` · ${r.reason}` : ''}
               </div>
+              {r.message && (
+                <details className="group mt-1.5">
+                  <summary className="cursor-pointer text-[12px] font-[650] text-fg-2 hover:text-fg">Show message</summary>
+                  <div className="mt-2 rounded-control border border-line bg-surface-2 p-3">
+                    {r.subject && <div className="mb-2 font-[650] text-fg">{r.subject}</div>}
+                    <p className="text-[12px] leading-[19px] whitespace-pre-wrap text-fg-2">{r.message}</p>
+                  </div>
+                </details>
+              )}
             </li>
           ))}
         </ul>
       )}
+      <p className="mt-4 text-[11px] text-fg-3">Reminders are drafted by AI and logged here. Quotely v1 does not email them.</p>
     </Card>
   );
 }

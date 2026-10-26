@@ -35,7 +35,8 @@ export function getQuote(id: string) {
       request: true,
       lines: { orderBy: { position: 'asc' } },
       invoices: { orderBy: { createdAt: 'asc' } },
-      activities: { orderBy: { at: 'asc' } },
+      // Oldest first, as the timeline reads top to bottom; id breaks ties between same-moment entries.
+      activities: { orderBy: [{ at: 'asc' }, { id: 'asc' }] },
       reminders: { orderBy: { createdAt: 'desc' } },
     },
   });

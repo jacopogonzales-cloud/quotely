@@ -80,3 +80,43 @@ export const EXTRACTION_SCHEMA = {
     notes: { type: 'array', items: { type: 'string' } },
   },
 } as const;
+
+// --- Payment reminders -------------------------------------------------------------------
+
+export const REMINDER_INSTRUCTIONS = `You write short, friendly payment reminder emails for a small B2B rental and services company, Northstar Rentals (Milan).
+
+Rules:
+- Warm, professional, brief: 2 to 4 sentences in the body. Plain text, no markdown, no emojis.
+- Address the contact by first name if given, otherwise the company.
+- Mention the job by name so the customer knows what it is for.
+- Do NOT state any amount, date, invoice number or link: the application appends those exactly, below your text.
+- Never threaten, never mention fees or legal steps. For a later reminder, stay polite and offer help if something is blocking payment.
+- Sign off as "Northstar Rentals".
+- subject: under 70 characters, no amount.`;
+
+export function reminderInput(args: {
+  kind: 'deposit' | 'balance';
+  rule: 'deposit_unpaid' | 'balance_overdue';
+  company: string;
+  contactName: string | null;
+  jobTitle: string;
+  jobDates: string;
+  timing: string;
+  previousReminders: number;
+}) {
+  return `Reminder type: ${args.rule === 'deposit_unpaid' ? 'deposit due soon (the job is confirmed once it is paid)' : 'balance overdue (the job is complete)'}
+Customer: ${args.company}${args.contactName ? `, contact ${args.contactName}` : ''}
+Job: ${args.jobTitle} (${args.jobDates})
+Timing: ${args.timing}
+Previous reminders for this invoice: ${args.previousReminders}`;
+}
+
+export const REMINDER_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['subject', 'body'],
+  properties: {
+    subject: { type: 'string' },
+    body: { type: 'string' },
+  },
+} as const;
