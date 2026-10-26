@@ -99,6 +99,8 @@ model Quote {
   state          QuoteState  @default(draft)
   currency       String      @default("EUR")
   depositPercent Int         @default(30)
+  // Payment terms chosen in the builder; becomes the deposit invoice's due date on approval.
+  depositDueDate DateTime?
   totalCents     Int         @default(0)
   depositCents   Int         @default(0)
   balanceCents   Int         @default(0)

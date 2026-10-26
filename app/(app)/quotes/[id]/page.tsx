@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { connection } from 'next/server';
 import { ChevronLeftIcon } from '@/components/icons';
 import { Badge, Card, CardTitle, Label, OverduePill, StatePill, cx } from '@/components/ui';
@@ -18,6 +18,8 @@ export default async function QuotePage({ params }: PageProps<'/quotes/[id]'>) {
   const { id } = await params;
   const quote = await getQuote(id);
   if (!quote) notFound();
+  // Drafts are edited in the builder.
+  if (quote.state === 'draft' && quote.requestId) redirect(`/quotes/new?request=${quote.requestId}`);
   const late = daysOverdue(quote);
 
   return (

@@ -4,6 +4,14 @@
 
 const DEFAULT_MODELS = ['gpt-5.4-mini'];
 
+export const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
+
+/**
+ * The model Quotely uses for quote extraction and reminder drafting: the cheapest one offered in
+ * OPENAI_MODELS. Change it here and nowhere else.
+ */
+export const QUOTELY_MODEL = 'gpt-5.6-luna';
+
 // AG_STUDIO_OPENAI_API_KEY is specific to this app, so a key set for it in .env.local always wins.
 // OPENAI_API_KEY is the fallback, so a key already exported for other tools works with no setup.
 // (Next.js prefers the process environment over .env.local for the same name, which is why the

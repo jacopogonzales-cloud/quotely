@@ -7,7 +7,10 @@ export function listRequests() {
     orderBy: { receivedAt: 'desc' },
     include: {
       customer: true,
-      quotes: { select: { id: true, number: true, state: true }, orderBy: { createdAt: 'desc' } },
+      quotes: {
+        select: { id: true, number: true, state: true, jobStartDate: true, lines: { select: { match: true } } },
+        orderBy: { createdAt: 'desc' },
+      },
     },
   });
 }
