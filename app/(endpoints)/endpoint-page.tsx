@@ -23,7 +23,7 @@ export function EndpointPage({
 }) {
   return (
     <main className="flex h-dvh flex-col bg-pp-canvas px-8 py-6 font-paypal text-pp-ink">
-      <Link href="/" className="text-sm font-semibold text-pp-blue hover:underline">
+      <Link href="/debug" className="text-sm font-semibold text-pp-blue hover:underline">
         ← All pages
       </Link>
       <h1 className="mt-3 text-[28px] font-semibold text-pp-navy">{title}</h1>

@@ -1,17 +1,125 @@
 @import "tailwindcss";
 
+/*
+ * Quotely design tokens (docs/design-system.md, "Obsidian × Lime", dark only). The single source
+ * of truth for the app's Tailwind colours (bg-surface-1, text-fg-2, border-line, ...) and for the
+ * AG Studio theme of the dashboard.
+ */
+:root {
+  color-scheme: dark;
+
+  --bg-base: #080d0f;
+  --bg-shell: #0d1416;
+  --surface-1: #111b1d;
+  --surface-2: #172426;
+  --surface-3: #203032;
+  --border: #2b3b3e;
+  --border-strong: #3f5558;
+  --text-primary: #f3f7f4;
+  --text-secondary: #b8c8c6;
+  --text-tertiary: #819593;
+  --accent: #c5fa82;
+  --accent-hover: #d7ffac;
+  --accent-foreground: #142013;
+  --accent-subtle: #273f28;
+  --focus-ring: #d7ffac;
+  --danger: #ff8c91;
+
+  /* Money states: every pill pairs one of these with text. */
+  --state-draft: #87969b;
+  --state-sent: #8faeff;
+  --state-deposit-due: #ffc66d;
+  --state-deposit-paid: #69dbbe;
+  --state-in-progress: #63c7f4;
+  --state-balance-due: #bb9bff;
+  --state-paid: #c5fa82;
+  --state-overdue: #ff8c91;
+
+  /* Chart series, in the order of the design system. */
+  --chart-quoted: #8faeff;
+  --chart-deposits: #69dbbe;
+  --chart-balances: #c5fa82;
+  --chart-outstanding: #bb9bff;
+  --chart-at-risk: #ffc66d;
+  --chart-overdue: #ff8c91;
+
+  --shadow-menu: 0 12px 36px rgba(0, 0, 0, 0.3);
+  --shadow-modal: 0 24px 80px rgba(0, 0, 0, 0.42);
+  --ease-fast: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-panel: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-payment: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 @theme inline {
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+
+  --color-base: var(--bg-base);
+  --color-shell: var(--bg-shell);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-fg: var(--text-primary);
+  --color-fg-2: var(--text-secondary);
+  --color-fg-3: var(--text-tertiary);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-foreground);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-focus: var(--focus-ring);
+  --color-danger: var(--danger);
+
+  --color-state-draft: var(--state-draft);
+  --color-state-sent: var(--state-sent);
+  --color-state-deposit-due: var(--state-deposit-due);
+  --color-state-deposit-paid: var(--state-deposit-paid);
+  --color-state-in-progress: var(--state-in-progress);
+  --color-state-balance-due: var(--state-balance-due);
+  --color-state-paid: var(--state-paid);
+  --color-state-overdue: var(--state-overdue);
+
+  --radius-badge: 6px;
+  --radius-control: 10px;
+  --radius-card: 14px;
+  --radius-modal: 20px;
+
+  --shadow-menu: var(--shadow-menu);
+  --shadow-modal: var(--shadow-modal);
 }
 
 body {
-  background: var(--pp-canvas);
-  color: var(--pp-ink);
-  font-family: var(--pp-font);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 450;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Amounts, IDs and timestamps line up in columns. */
+.font-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /*
- * PayPal design tokens: the single source of truth for the dashboard shell (through the
+ * PayPal design tokens from the boilerplate, kept for the debug pages under /debug. The
+ * single source of truth for the dashboard shell (through the
  * Tailwind colours below, e.g. bg-pp-blue), for AG Studio (app/dashboard/studio/theme.ts)
  * and for AG Grid (app/(endpoints)/data-grid.tsx), whose themes reference these variables directly.
  */

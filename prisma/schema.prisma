@@ -1,0 +1,273 @@
+// Quotely data model. Portable between SQLite (local, prisma/dev.db) and PostgreSQL (Render):
+// switching means changing `provider` and DATABASE_URL, nothing else. To keep that true:
+//   - money is integer cents (EUR only), never Float or Decimal
+//   - free-form JSON is stored as String, not Json
+//   - enums only (supported by both since Prisma 6.2), no native types
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// --- Catalogue & customers --------------------------------------------------------
+
+model PriceListItem {
+  id         String      @id @default(cuid())
+  sku        String      @unique
+  name       String
+  unit       String // "per event", "per unit", "per hour", "flat"
+  priceCents Int
+  currency   String      @default("EUR")
+  // Comma-separated synonyms the AI matcher may use, e.g. "65 inch tv, 65\" screen".
+  aliases    String      @default("")
+  active     Boolean     @default(true)
+  updatedAt  DateTime    @updatedAt
+  createdAt  DateTime    @default(now())
+  lines      QuoteLine[]
+}
+
+model Customer {
+  id          String           @id @default(cuid())
+  company     String
+  contactName String?
+  email       String
+  city        String?
+  sector      String?
+  createdAt   DateTime         @default(now())
+  requests    IncomingRequest[]
+  quotes      Quote[]
+
+  @@index([email])
+}
+
+// --- Requests ----------------------------------------------------------------------
+
+enum RequestStatus {
+  new
+  drafted // a quote draft exists
+  archived
+}
+
+model IncomingRequest {
+  id          String        @id @default(cuid())
+  number      String        @unique // "REQ-2051"
+  customerId  String?
+  customer    Customer?     @relation(fields: [customerId], references: [id])
+  // What arrived, before any matching to a customer record.
+  fromName    String?
+  fromEmail   String?
+  fromCompany String?
+  subject     String?
+  body        String
+  source      String        @default("email") // "email" | "form" | "paste"
+  status      RequestStatus @default(new)
+  receivedAt  DateTime      @default(now())
+  // Last AI extraction result as JSON text (see lib/ai/extract.ts), kept for the source highlights.
+  extraction  String?
+  quotes      Quote[]
+}
+
+// --- Quotes ------------------------------------------------------------------------
+
+// `in_progress` is an alias of `deposit_paid` in v1. `overdue` is not a stage: it is computed
+// from invoice due dates (lib/quotes.ts).
+enum QuoteState {
+  draft
+  approved
+  deposit_due
+  deposit_paid
+  in_progress
+  balance_due
+  paid
+}
+
+model Quote {
+  id             String      @id @default(cuid())
+  number         String      @unique // "Q-1042"
+  requestId      String?
+  request        IncomingRequest? @relation(fields: [requestId], references: [id])
+  customerId     String
+  customer       Customer    @relation(fields: [customerId], references: [id])
+  title          String
+  location       String?
+  jobStartDate   DateTime?
+  jobEndDate     DateTime?
+  state          QuoteState  @default(draft)
+  currency       String      @default("EUR")
+  depositPercent Int         @default(30)
+  totalCents     Int         @default(0)
+  depositCents   Int         @default(0)
+  balanceCents   Int         @default(0)
+  notes          String?
+  // Demo data: never reconciled against PayPal.
+  seeded         Boolean     @default(false)
+  approvedAt     DateTime?
+  completedAt    DateTime?
+  paidAt         DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  lines          QuoteLine[]
+  invoices       Invoice[]
+  activities     Activity[]
+  reminders      Reminder[]
+
+  @@index([state])
+}
+
+enum LineMatch {
+  matched // price taken from the price list
+  edited // started from the price list, price changed by the operator
+  needs_price // no price-list match and no price: blocks approval
+  manual // added and priced by the operator
+}
+
+model QuoteLine {
+  id              String         @id @default(cuid())
+  quoteId         String
+  quote           Quote          @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  position        Int
+  description     String
+  quantity        Int
+  // Null until priced. A null price is "Needs a price" and blocks approval.
+  unitPriceCents  Int?
+  priceListItemId String?
+  priceListItem   PriceListItem? @relation(fields: [priceListItemId], references: [id])
+  match           LineMatch
+  // The phrase in the request this line came from, for source highlighting.
+  sourceText      String?
+
+  @@index([quoteId])
+}
+
+// --- Invoices ----------------------------------------------------------------------
+
+enum InvoiceKind {
+  deposit
+  balance
+}
+
+enum InvoiceStatus {
+  creating // row reserved, PayPal call in flight or failed before a PayPal id was stored
+  draft // PayPal draft exists, not sent yet
+  sent
+  paid
+  cancelled
+  failed
+}
+
+model Invoice {
+  id              String        @id @default(cuid())
+  quoteId         String
+  quote           Quote         @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  kind            InvoiceKind
+  status          InvoiceStatus @default(creating)
+  number          String        @unique // our invoice_number on PayPal, e.g. "Q-1042-D"
+  amountCents     Int
+  paidCents       Int           @default(0)
+  dueDate         DateTime
+  paypalInvoiceId String?       @unique
+  payerViewUrl    String?
+  seeded          Boolean       @default(false)
+  sentAt          DateTime?
+  paidAt          DateTime?
+  lastSyncedAt    DateTime?
+  lastError       String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  reminders       Reminder[]
+
+  // One invoice per stage per quote: the database refuses a duplicate.
+  @@unique([quoteId, kind])
+  @@index([status])
+}
+
+// --- Audit trail -------------------------------------------------------------------
+
+enum Actor {
+  operator
+  paypal
+  agent
+  system
+}
+
+model Activity {
+  id      String   @id @default(cuid())
+  quoteId String
+  quote   Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  at      DateTime @default(now())
+  actor   Actor
+  // Machine-readable kind, e.g. "quote.approved", "invoice.sent", "invoice.paid", "state.changed".
+  type    String
+  message String
+  // Optional JSON text with details (amounts, PayPal ids, from/to state).
+  meta    String?
+
+  @@index([quoteId, at])
+}
+
+// --- Nudge agent -------------------------------------------------------------------
+
+enum ReminderRuleKey {
+  deposit_unpaid
+  balance_overdue
+}
+
+enum ReminderOutcome {
+  sent
+  scheduled
+  skipped
+  failed
+}
+
+model ReminderRule {
+  key        ReminderRuleKey @id
+  enabled    Boolean         @default(true)
+  // Days relative to the due date: negative = before, positive = after.
+  offsetDays Int
+  updatedAt  DateTime        @updatedAt
+}
+
+model Reminder {
+  id           String          @id @default(cuid())
+  quoteId      String
+  quote        Quote           @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  invoiceId    String?
+  invoice      Invoice?        @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  rule         ReminderRuleKey
+  outcome      ReminderOutcome
+  reason       String?
+  subject      String?
+  message      String?
+  amountCents  Int
+  // The calendar day (YYYY-MM-DD, Europe/Rome) this reminder belongs to.
+  day          String
+  scheduledFor DateTime?
+  createdAt    DateTime        @default(now())
+
+  // At most one reminder per rule per quote per day.
+  @@unique([quoteId, rule, day])
+  @@index([createdAt])
+}
+
+// --- PayPal webhooks & settings ----------------------------------------------------
+
+model WebhookEvent {
+  id         String   @id // PayPal event id, so redelivery is a no-op
+  type       String
+  resourceId String?
+  verified   Boolean
+  payload    String
+  receivedAt DateTime @default(now())
+  processed  Boolean  @default(false)
+  error      String?
+}
+
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
