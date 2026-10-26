@@ -1,4 +1,5 @@
-// Demo data for Northstar Rentals (Milan). Run with `npm run db:seed` (or `npm run db:reset`).
+// Demo data for Northstar Rentals (Milan), for any PostgreSQL database in DATABASE_URL.
+// Run with `npm run db:seed` (replaces all data) or `npm run db:reset` (recreates the tables first).
 //
 // Dates are relative to the moment the seed runs, so the demo always has a deposit due soon, an
 // overdue balance and recent payments. The one exception is the Studio Marconi request, whose
@@ -9,7 +10,12 @@
 
 import { PrismaClient, type Actor, type LineMatch, type QuoteState, type ReminderOutcome, type ReminderRuleKey } from '@prisma/client';
 
-const db = new PrismaClient({ datasourceUrl: process.env.DATABASE_URL || 'file:./dev.db' });
+// DATABASE_URL comes from .env.local via prisma.config.ts, or from the environment (e.g. Render).
+if (!process.env.DATABASE_URL) {
+  console.error('DATABASE_URL is not set. Put a PostgreSQL URL in .env.local (see env.example).');
+  process.exit(1);
+}
+const db = new PrismaClient();
 
 const DAY = 86_400_000;
 const NOW = Date.now();

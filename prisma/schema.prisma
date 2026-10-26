@@ -1,15 +1,14 @@
-// Quotely data model. Portable between SQLite (local, prisma/dev.db) and PostgreSQL (Render):
-// switching means changing `provider` and DATABASE_URL, nothing else. To keep that true:
+// Quotely data model, on PostgreSQL (DATABASE_URL), locally and on Render.
 //   - money is integer cents (EUR only), never Float or Decimal
-//   - free-form JSON is stored as String, not Json
-//   - enums only (supported by both since Prisma 6.2), no native types
+//   - free-form JSON is stored as String (text), not Json
+//   - no native types, so the schema stays portable
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 

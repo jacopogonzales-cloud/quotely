@@ -40,6 +40,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# local SQLite database
+# the SQLite file used before the move to PostgreSQL, if it is still around
 /prisma/dev.db
 /prisma/dev.db-journal

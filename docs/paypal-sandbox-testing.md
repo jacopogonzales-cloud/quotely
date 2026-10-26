@@ -114,7 +114,7 @@ It answers `{ "checked": n, "paid": [...], "cancelled": n, "errors": [...] }`. W
 ## 5. Start over
 
 ```bash
-npm run db:reset   # recreate prisma/dev.db and reseed
+npm run db:reset   # drop and recreate the tables in DATABASE_URL, then reseed
 ```
 
 Invoices already sent stay in your PayPal sandbox; they don't affect Quotely after a reset. Each Quotely invoice number has a random suffix (e.g. `Q-1042-D-QXT9`), so a fresh Q-1042 never collides with an old invoice. Cancel leftovers in the PayPal dashboard if you want a tidy list.

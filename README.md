@@ -33,7 +33,7 @@ Built for the [PayPal AI Hackathon](https://paypalaihackathon.devpost.com) on th
 | **AG Studio** (`ag-studio`, `ag-studio-react` 3.0) | The dashboard: `AgStudioProvider`, a saved report as initial state, native KPI / line / grid / donut widgets, three custom React widgets registered with `createWidgets`, the dark theme via `studioTheme.withParams`, real Edit mode and the AI Assistant. |
 | **OpenAI Responses API** | Quote extraction with strict structured JSON output, and reminder drafting. One model, `gpt-5.6-luna`, set in `lib/ai/index.ts`; prompts in `lib/ai/prompts.ts`. The key never reaches the browser. |
 | **Next.js 16** (App Router) | Server components, server actions, route handlers, `after()` for the agent run, route-level loading and error states. |
-| **Prisma + SQLite** | `prisma/dev.db` locally; the schema is portable to PostgreSQL (integer cents, no native types). |
+| **Prisma + PostgreSQL** | One schema for local development and Render (integer cents, enums, no native types). |
 | **Tailwind CSS 4** | The "Obsidian × Lime" dark theme from `docs/design-system.md`, as CSS tokens. |
 
 ## Architecture
@@ -53,7 +53,7 @@ flowchart LR
     Billing[lib/billing.ts<br/>approve · issueInvoice · markInvoicePaid]
     Agent[lib/agent/nudge.ts]
     Extract[lib/ai/extract.ts]
-    DB[(Prisma · SQLite)]
+    DB[(Prisma · PostgreSQL)]
   end
   PayPal[(PayPal sandbox)]
   OpenAI[(OpenAI)]
@@ -105,16 +105,36 @@ docs/                 Design system and PayPal sandbox testing guide
 
 ## Setup
 
-Requires Node.js 20.9+ and a PayPal sandbox REST app ([developer.paypal.com](https://developer.paypal.com/dashboard/applications/sandbox)).
+Requires Node.js 20.9+, a PostgreSQL database (see [Database](#database)) and a PayPal sandbox REST app ([developer.paypal.com](https://developer.paypal.com/dashboard/applications/sandbox)).
 
 ```bash
-npm install                  # also generates the Prisma client
-cp env.example .env.local    # then fill in the values below
-npm run db:reset             # create prisma/dev.db and load the demo data
+npm install                  # also generates the Prisma client (postinstall)
+cp env.example .env.local    # then fill in the values below, DATABASE_URL included
+npm run db:reset             # create the tables and load the demo data
 npm run dev
 ```
 
-Open http://localhost:3000 (it lands on the dashboard). `.env.local` is git-ignored.
+Open http://localhost:3000 (it lands on the dashboard). `.env.local` is git-ignored. The Prisma CLI reads it too (through `prisma.config.ts`), so `npm run db:*` and the app always use the same database.
+
+### Database
+
+Quotely runs on PostgreSQL everywhere. For local development, pick one:
+
+**A local PostgreSQL in Docker** (recommended; your demo data stays separate from production):
+
+```bash
+docker run --name quotely-db -d -p 5432:5432 \
+  -e POSTGRES_USER=quotely -e POSTGRES_PASSWORD=quotely -e POSTGRES_DB=quotely \
+  -v quotely-db:/var/lib/postgresql/data postgres:16
+```
+
+```
+DATABASE_URL=postgresql://quotely:quotely@localhost:5432/quotely
+```
+
+Stop and start it later with `docker stop quotely-db` / `docker start quotely-db`; the data lives in the `quotely-db` volume.
+
+**Or the Render database**: in the Render dashboard, open the PostgreSQL instance → *Connect* → copy the **External Database URL** into `DATABASE_URL` (append `?sslmode=require` if it has no query string). Local runs then read and write the deployed data, and `npm run db:seed` / `db:reset` **replace everything in it**.
 
 ### Environment variables
 
@@ -126,18 +146,31 @@ Open http://localhost:3000 (it lands on the dashboard). `.env.local` is git-igno
 | `AG_STUDIO_OPENAI_API_KEY` (or `OPENAI_API_KEY`) | for AI | OpenAI key for quote drafting, reminders and the Studio assistant. Without it, quotes can be created manually. |
 | `OPENAI_MODELS` | no | Models the Studio assistant may offer, comma-separated (first is the default). |
 | `AG_STUDIO` | no | AG Studio licence key; without it Studio shows a trial watermark. |
-| `DATABASE_URL` | no | Leave blank for `prisma/dev.db`. For PostgreSQL, set it and change `provider` in `prisma/schema.prisma`. |
+| `DATABASE_URL` | yes | PostgreSQL connection string: local Docker, or Render's External (local) / Internal (on Render) Database URL. |
 
 ### Scripts
 
 | Command | Does |
 |---|---|
 | `npm run dev` / `build` / `start` / `lint` | The usual Next.js scripts. |
-| `npm run db:push` | Sync the schema to the database. |
+| `npm run db:push` | Create or update the tables to match `prisma/schema.prisma`. |
 | `npm run db:seed` | Replace all data with the demo data (dates are relative to today). |
-| `npm run db:reset` | Recreate the database and seed it. |
+| `npm run db:reset` | Drop and recreate the tables, then seed. |
+
+All three use `DATABASE_URL`. To target another database once, prefix the command: `DATABASE_URL="postgresql://…" npm run db:seed` (a variable already set in the shell wins over `.env.local`).
 
 The demo company is **Northstar Rentals** (Milan) with customers from an events agency, catering companies and an AV installer: 11 price-list items, 3 new requests (including Studio Marconi: 4 × 65" displays, 2 mic kits, delivery and setup, €2,800.00, deposit €840.00), and 6 quotes across every stage including an overdue balance and a fully paid job. Seeded quotes with invoices are marked *Demo data* and never talk to PayPal; only quotes created in the app do.
+
+## Deploying to Render
+
+1. Create a **PostgreSQL** instance, then a **Web Service** from this repository (Node).
+2. Environment: `DATABASE_URL` = the database's **Internal Database URL**, plus `PAYPAL_CLIENT_ID`, `PAYPAL_SECRET`, `PAYPAL_WEBHOOK_ID`, `QUOTELY_CRON_SECRET`, `AG_STUDIO_OPENAI_API_KEY`, `OPENAI_MODELS`, `AG_STUDIO`.
+3. Build command: `npm install && npx prisma generate && npx prisma db push && npm run build` (`prisma generate` also runs on `postinstall`; `db push` creates or updates the tables).
+   Start command: `npm start`.
+4. Load the demo data once, from your machine: `DATABASE_URL="<External Database URL>" npm run db:seed`.
+5. Register the PayPal webhook at `https://<your-service>.onrender.com/api/paypal/webhook` (see the testing guide).
+
+In production, webhook events without a valid signature are rejected (so `PAYPAL_WEBHOOK_ID` is required for webhooks; polling works regardless), and the scheduler routes require `QUOTELY_CRON_SECRET`. A Render Cron Job can call them with `curl -X POST … -H "x-quotely-cron: …"`.
 
 ## Testing the payment flow
 
