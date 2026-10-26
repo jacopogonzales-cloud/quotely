@@ -3,6 +3,8 @@
 // Settings actions. Single-operator app with no login (see ../actions.ts); inputs are validated in lib/settings.ts.
 
 import { revalidatePath } from 'next/cache';
+import { after } from 'next/server';
+import { runNudgeAgent } from '@/lib/agent/nudge';
 import type { ReminderRuleKey } from '@prisma/client';
 import { db } from '@/lib/db';
 import { verifyConnection } from '@/lib/paypal';
@@ -51,6 +53,8 @@ export async function saveReminderRulesAction(rules: { key: ReminderRuleKey; ena
   if (!Array.isArray(rules)) return { ok: false, error: 'Invalid rules' };
   try {
     await saveReminderRules(rules.map((r) => ({ key: r.key, enabled: Boolean(r.enabled), offsetDays: Number(r.offsetDays) })));
+    // Reschedule pending reminders under the new rules straight away.
+    after(() => runNudgeAgent({ reconcile: false }).catch((err) => console.error('[quotely] nudge agent failed:', err)));
     revalidatePath('/settings');
     return { ok: true, data: undefined };
   } catch (err) {

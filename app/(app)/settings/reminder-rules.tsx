@@ -40,7 +40,7 @@ export function ReminderRules({ rules: initial, lastRun: initialRun }: { rules: 
   const save = () =>
     startSaving(async () => {
       const result = await saveReminderRulesAction(rules);
-      setMessage(result.ok ? { ok: true, text: 'Reminder rules saved. The agent uses them from its next run.' } : { ok: false, text: result.error });
+      setMessage(result.ok ? { ok: true, text: 'Reminder rules saved. Pending reminders are rescheduled to match.' } : { ok: false, text: result.error });
     });
   const runNow = () =>
     startRunning(async () => {

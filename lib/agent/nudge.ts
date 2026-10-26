@@ -8,6 +8,8 @@
 // Reminders go out at 09:00 Milan time. A future one is logged as "scheduled"; when its time
 // comes it becomes "sent" (or "failed", retried next run). Payment status is reconciled with
 // PayPal first, and a scheduled reminder whose invoice was paid is "skipped: already paid".
+// Every run also reconciles the schedule itself: when the rules change, the pending reminder
+// moves to the new day; once a reminder is sent, other plans for that rule and quote are cancelled.
 //
 // Nothing is emailed in v1: a "sent" reminder is the drafted email, logged and shown in the UI.
 
@@ -71,6 +73,19 @@ async function draftReminder(inv: Candidate, rule: ReminderRuleKey, now: Date, p
 
 // --- The run -----------------------------------------------------------------------------
 
+/**
+ * Cancels scheduled reminders that no longer apply. They stay in the history as skipped (so the
+ * audit trail is complete) but add no timeline noise: the event that replaced them is logged.
+ */
+async function cancelScheduled(rows: Reminder[], reason: string) {
+  if (rows.length === 0) return 0;
+  const { count } = await db.reminder.updateMany({
+    where: { id: { in: rows.map((r) => r.id) }, outcome: 'scheduled' },
+    data: { outcome: 'skipped', reason, scheduledFor: null },
+  });
+  return count;
+}
+
 const log = (quoteId: string, type: string, message: string, at?: Date) =>
   db.activity.create({ data: { quoteId, actor: 'agent', type, message, ...(at ? { at } : {}) } });
 
@@ -100,13 +115,15 @@ async function run(reconcile: boolean, now: Date): Promise<NudgeResult> {
   const pending = await db.reminder.findMany({ where: { outcome: 'scheduled' }, include: { invoice: true } });
   for (const r of pending) {
     const reason =
-      !r.invoice || r.invoice.status === 'paid'
-        ? 'already paid'
-        : r.invoice.status === 'cancelled'
-          ? 'invoice cancelled'
-          : !rules.get(r.rule)?.enabled
-            ? 'reminder rule turned off'
-            : null;
+      !r.invoice
+        ? 'invoice no longer exists'
+        : r.invoice.status === 'paid'
+          ? 'already paid'
+          : r.invoice.status === 'cancelled'
+            ? 'invoice cancelled'
+            : !rules.get(r.rule)?.enabled
+              ? 'reminder rule turned off'
+              : null;
     if (!reason) continue;
     await db.reminder.update({ where: { id: r.id }, data: { outcome: 'skipped', reason, scheduledFor: null } });
     await log(r.quoteId, 'reminder.skipped', `${RULE_LABEL[r.rule]} skipped · ${reason}`, now);
@@ -136,15 +153,32 @@ async function run(reconcile: boolean, now: Date): Promise<NudgeResult> {
         : lastSent
           ? addDays(lastSent.day, REPEAT_DAYS)
           : addDays(isoDay(inv.dueDate), rule.offsetDays);
-    if (!ruleTarget) continue;
+    const scheduled = mine.filter((r) => r.outcome === 'scheduled');
+    if (!ruleTarget) {
+      // Nothing more to send for this rule (the one deposit reminder went out): drop any plan left over.
+      result.skipped += await cancelScheduled(scheduled, 'cancelled · reminder already sent');
+      continue;
+    }
     // Never nudge on the day the invoice itself went out (e.g. a deposit due tomorrow).
     const earliest = inv.sentAt ? addDays(isoDay(inv.sentAt), 1) : ruleTarget;
     const target = ruleTarget < earliest ? earliest : ruleTarget;
     const sendAt = zonedTime(target, SEND_HOUR);
 
     if (now < sendAt) {
-      // Not yet: make sure the next one is on the schedule (once).
-      if (mine.some((r) => r.day === target)) continue;
+      // Not yet: exactly one scheduled entry, on the day the current rule says.
+      if (mine.some((r) => r.day === target)) {
+        result.skipped += await cancelScheduled(scheduled.filter((r) => r.day !== target), 'cancelled · replaced by a newer schedule');
+        continue;
+      }
+      const [move, ...extra] = scheduled;
+      if (move) {
+        // The rule changed (or the due date moved): reschedule the pending reminder.
+        await db.reminder.update({ where: { id: move.id }, data: { day: target, scheduledFor: sendAt, amountCents: inv.amountCents - inv.paidCents } });
+        await log(inv.quoteId, 'reminder.rescheduled', `${RULE_LABEL[ruleKey]} rescheduled for ${formatDateTime(sendAt)} · reminder rules changed`, now);
+        result.skipped += await cancelScheduled(extra, 'cancelled · replaced by a newer schedule');
+        result.scheduled++;
+        continue;
+      }
       try {
         await db.reminder.create({
           data: {
@@ -185,8 +219,11 @@ async function run(reconcile: boolean, now: Date): Promise<NudgeResult> {
       };
       if (slot) await db.reminder.update({ where: { id: slot.id }, data });
       else await db.reminder.create({ data: { ...data, quoteId: inv.quoteId, invoiceId: inv.id, rule: ruleKey } });
-      // Any older scheduled entry for this invoice is superseded by the reminder just sent.
-      await db.reminder.deleteMany({ where: { invoiceId: inv.id, rule: ruleKey, outcome: 'scheduled', day: { lte: today } } });
+      // Every other plan for this rule and quote is superseded by the reminder just sent.
+      result.skipped += await cancelScheduled(
+        scheduled.filter((r) => r.id !== slot?.id),
+        'cancelled · reminder already sent',
+      );
       await log(inv.quoteId, 'reminder.sent', `${RULE_LABEL[ruleKey]} sent to ${inv.quote.customer.email} · ${formatMoney(inv.amountCents - inv.paidCents)} ${draft.timing}`, now);
       result.sent++;
     } catch (err) {
